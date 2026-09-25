@@ -6,6 +6,7 @@ import {
   UTCTimestamp, 
   CandlestickSeries, 
   HistogramSeries,
+  LineSeries,
   LineStyle,
   CrosshairMode
 } from "lightweight-charts";
@@ -49,10 +50,10 @@ export default function TradingChart({
   bookWalls = [],
 }: TradingChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const levelSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
   // States
@@ -137,95 +138,46 @@ export default function TradingChart({
     return () => clearInterval(timer);
   }, [timeframe]);
 
-  // Render Horizontal Rays on Overlay Canvas (Originates from specific candle to the right edge)
-  const renderOverlay = useCallback(() => {
-    const canvas = canvasRef.current;
+  // Far-future timestamp for extending level rays to the right edge
+  const FAR_FUTURE = 4102444800 as UTCTimestamp; // 2100-01-01
+
+  // Sync User Level LineSeries — native chart rendering, zero jitter
+  const syncLevelSeries = useCallback(() => {
     const chart = chartRef.current;
-    const series = candleSeriesRef.current;
-    if (!canvas || !chart || !series) return;
+    if (!chart) return;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    // Remove old level series
+    levelSeriesRef.current.forEach((s) => {
+      try { chart.removeSeries(s); } catch {}
+    });
+    levelSeriesRef.current = [];
 
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth;
-    const h = canvas.clientHeight;
-
-    if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
-      canvas.width = Math.floor(w * dpr);
-      canvas.height = Math.floor(h * dpr);
-    }
-
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, w, h);
-
-    const timeScale = chart.timeScale();
     const current = currentPriceRef.current;
-    const rightMargin = 60; // Stop before price scale
 
     userLevelsRef.current.forEach((lvl) => {
-      const y = series.priceToCoordinate(lvl.price);
-      if (y === null || y < 0 || y > h) return;
-
-      // Start X from the origin candle time
-      const coord = timeScale.timeToCoordinate(lvl.time as UTCTimestamp);
-      let startX = coord !== null ? (coord as unknown as number) : 0;
-
-      const endX = w - rightMargin;
-      if (startX > endX) return; // In the future, not visible
-
       const dist = current ? ((lvl.price - current) / current) * 100 : 0;
       const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}%`;
       const priceStr = formatPrice(lvl.price);
-      const label = `УРОВЕНЬ $${priceStr} (${distStr})`;
 
-      // 1. Draw horizontal ray line (starts at candle, extends ONLY to the right)
-      ctx.strokeStyle = "#C084FC"; // Neon Purple (purple-400)
-      ctx.lineWidth = 1.8;
-      ctx.setLineDash([5, 4]);
-      ctx.beginPath();
-      ctx.moveTo(startX, y);
-      ctx.lineTo(endX, y);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      const series = chart.addSeries(LineSeries, {
+        color: "#C084FC",
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        crosshairMarkerVisible: false,
+        lastValueVisible: true,
+        priceLineVisible: false,
+        title: `${lvl.type} $${priceStr} (${distStr})`,
+        pointMarkersVisible: true,
+        pointMarkersRadius: 4,
+      });
 
-      // 2. Draw origin dot at the exact candle High/Low
-      ctx.fillStyle = "#A855F7";
-      ctx.beginPath();
-      ctx.arc(startX, y, 4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#FFFFFF";
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
+      series.setData([
+        { time: lvl.time as UTCTimestamp, value: lvl.price },
+        { time: FAR_FUTURE, value: lvl.price },
+      ]);
 
-      // 3. Draw badge at the right end of the ray
-      ctx.font = "bold 10px 'JetBrains Mono', monospace";
-      const textWidth = ctx.measureText(label).width;
-      const badgeW = textWidth + 12;
-      const badgeH = 18;
-      const badgeX = endX - badgeW;
-      const badgeY = y - badgeH / 2;
-
-      ctx.fillStyle = "rgba(16, 22, 31, 0.95)";
-      ctx.strokeStyle = "rgba(168, 85, 247, 0.7)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      if (typeof ctx.roundRect === "function") {
-        ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 3);
-      } else {
-        ctx.rect(badgeX, badgeY, badgeW, badgeH);
-      }
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.fillStyle = "#F3E8FF";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(label, badgeX + badgeW / 2, y);
+      levelSeriesRef.current.push(series);
     });
-
-    ctx.restore();
   }, [formatPrice]);
 
   // Main Chart Setup and Lifecycle (ONLY depends on symbol and timeframe!)
@@ -312,19 +264,13 @@ export default function TradingChart({
       visible: false,
     });
 
-    // 4. Resize and Canvas sync
+    // 4. Resize handler
     const resizeObserver = new ResizeObserver((entries) => {
       if (!entries.length || isDisposed) return;
       const { width, height } = entries[0].contentRect;
       chart.resize(width, height);
-      renderOverlay();
     });
     resizeObserver.observe(containerRef.current);
-
-    // Sync overlay on chart zoom and pan
-    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-      renderOverlay();
-    });
 
     // 5. Initial Historical Klines Fetch (500 bars)
     const loadHistory = async () => {
@@ -387,7 +333,6 @@ export default function TradingChart({
         volumeSeries.setData(volData);
         chart.timeScale().fitContent();
         setChartStatus("Binance Futures: Live");
-        setTimeout(renderOverlay, 50);
       } catch (err) {
         if (!isDisposed) {
           setChartStatus("Ошибка загрузки истории Binance");
@@ -454,8 +399,6 @@ export default function TradingChart({
                 if (cache.length > 1000) cache.shift();
               }
             }
-
-            renderOverlay();
           }
         } catch {}
       };
@@ -515,15 +458,17 @@ export default function TradingChart({
       if (wsRef.current) {
         try { wsRef.current.close(); } catch {}
       }
+      // Remove level series before destroying chart
+      levelSeriesRef.current = [];
       chart.remove();
       chartRef.current = null;
     };
-  }, [cleanSymbol, timeframe, renderOverlay, saveLevels]); // STABLE DEPENDENCIES: Never re-creates chart on tool clicks!
+  }, [cleanSymbol, timeframe, saveLevels]); // STABLE DEPENDENCIES: Never re-creates chart on tool clicks!
 
-  // Re-render rays overlay whenever userLevels or currentPrice changes
+  // Sync native level LineSeries whenever userLevels or currentPrice changes
   useEffect(() => {
-    renderOverlay();
-  }, [userLevels, currentPrice, renderOverlay]);
+    syncLevelSeries();
+  }, [userLevels, currentPrice, syncLevelSeries]);
 
   // Render Order Book Walls as Native PriceLines (Zero Lag)
   useEffect(() => {
@@ -715,12 +660,6 @@ export default function TradingChart({
       <div className="relative flex-1 w-full h-full min-h-0">
         {/* TradingView Chart Container */}
         <div ref={containerRef} className="w-full h-full" />
-
-        {/* Lightweight Horizontal Rays Canvas Overlay */}
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-0 pointer-events-none z-10 w-full h-full"
-        />
 
         {/* Floating Active Levels Pills (Quick Delete) */}
         {userLevels.length > 0 && (
