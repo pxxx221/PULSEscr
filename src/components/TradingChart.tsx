@@ -6,9 +6,13 @@ import {
   UTCTimestamp, 
   CandlestickSeries, 
   HistogramSeries,
-  LineSeries,
   LineStyle,
-  CrosshairMode
+  CrosshairMode,
+  ISeriesPrimitive,
+  SeriesAttachedParameter,
+  IPrimitivePaneView,
+  IPrimitivePaneRenderer,
+  ISeriesPrimitiveAxisView
 } from "lightweight-charts";
 import { 
   Timer, 
@@ -42,6 +46,220 @@ interface UserLevel {
   createdAt: number;
 }
 
+// Native Lightweight Charts Plugin for Horizontal Ray Levels
+class HorizontalRaysPriceAxisView implements ISeriesPrimitiveAxisView {
+  private _source: HorizontalRaysPlugin;
+  private _level: UserLevel;
+
+  constructor(source: HorizontalRaysPlugin, level: UserLevel) {
+    this._source = source;
+    this._level = level;
+  }
+
+  coordinate(): number {
+    const series = this._source.series;
+    if (!series) return -9999;
+    const y = series.priceToCoordinate(this._level.price);
+    return y !== null ? Number(y) : -9999;
+  }
+
+  text(): string {
+    const p = this._level.price;
+    if (p >= 1000) return p.toFixed(2);
+    if (p >= 1) return p.toFixed(4);
+    return p.toFixed(6);
+  }
+
+  textColor(): string {
+    return "#FFFFFF";
+  }
+
+  backColor(): string {
+    return "#9333EA";
+  }
+
+  visible(): boolean {
+    return true;
+  }
+}
+
+class HorizontalRaysRenderer implements IPrimitivePaneRenderer {
+  private _source: HorizontalRaysPlugin;
+
+  constructor(source: HorizontalRaysPlugin) {
+    this._source = source;
+  }
+
+  draw(target: any) {
+    target.useMediaCoordinateSpace((scope: { context: CanvasRenderingContext2D; mediaSize: { width: number; height: number } }) => {
+      const { context: ctx, mediaSize } = scope;
+      const chart = this._source.chart;
+      const series = this._source.series;
+      if (!chart || !series) return;
+
+      const timeScale = chart.timeScale();
+      const current = this._source.currentPrice;
+      const levels = this._source.levels;
+      if (!levels || !levels.length) return;
+
+      const w = mediaSize.width;
+      const h = mediaSize.height;
+
+      ctx.save();
+
+      for (const lvl of levels) {
+        const y = series.priceToCoordinate(lvl.price);
+        if (y === null || y < -20 || y > h + 20) continue;
+
+        // Find candle start coordinate
+        const coord = timeScale.timeToCoordinate(lvl.time as UTCTimestamp);
+        
+        // If candle is to the right of the visible screen (future), don't draw
+        if (coord !== null && (coord as unknown as number) > w) continue;
+
+        // If candle is scrolled off to the left (coord < 0 or coord === null),
+        // start at 0 (left edge of chart) so the line stays visible as you scroll right!
+        const startX = (coord !== null && (coord as unknown as number) > 0) ? (coord as unknown as number) : 0;
+        const endX = w; // Extends all the way to right edge of the chart pane!
+
+        if (startX >= endX) continue;
+
+        const dist = current ? ((lvl.price - current) / current) * 100 : 0;
+        const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}%`;
+        const priceStr = lvl.price >= 1000 
+          ? lvl.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : lvl.price >= 1 
+          ? lvl.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+          : lvl.price.toFixed(6);
+
+        const label = `${lvl.type} $${priceStr} (${distStr})`;
+
+        // 1. Draw horizontal ray line from startX to endX
+        ctx.strokeStyle = "#C084FC"; // Neon Purple (purple-400)
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(startX, y);
+        ctx.lineTo(endX, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 2. Draw origin dot at the exact candle High/Low (only if origin candle is on screen)
+        if (coord !== null && (coord as unknown as number) >= 0 && (coord as unknown as number) <= w) {
+          const originX = coord as unknown as number;
+          ctx.fillStyle = "#A855F7";
+          ctx.beginPath();
+          ctx.arc(originX, y, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#FFFFFF";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+
+        // 3. Draw badge at the right end of the ray
+        ctx.font = "bold 10px 'JetBrains Mono', monospace";
+        const textWidth = ctx.measureText(label).width;
+        const badgeW = textWidth + 12;
+        const badgeH = 18;
+        const badgeX = endX - badgeW - 6;
+        const badgeY = y - badgeH / 2;
+
+        ctx.fillStyle = "rgba(16, 22, 31, 0.95)";
+        ctx.strokeStyle = "rgba(168, 85, 247, 0.8)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        if (typeof ctx.roundRect === "function") {
+          ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 3);
+        } else {
+          ctx.rect(badgeX, badgeY, badgeW, badgeH);
+        }
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = "#F3E8FF";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, badgeX + badgeW / 2, y);
+      }
+
+      ctx.restore();
+    });
+  }
+}
+
+class HorizontalRaysPaneView implements IPrimitivePaneView {
+  private _source: HorizontalRaysPlugin;
+  private _renderer: HorizontalRaysRenderer;
+
+  constructor(source: HorizontalRaysPlugin) {
+    this._source = source;
+    this._renderer = new HorizontalRaysRenderer(source);
+  }
+
+  zOrder(): "normal" {
+    return "normal";
+  }
+
+  renderer(): IPrimitivePaneRenderer {
+    return this._renderer;
+  }
+}
+
+class HorizontalRaysPlugin implements ISeriesPrimitive {
+  private _chart: IChartApi | null = null;
+  private _series: ISeriesApi<any> | null = null;
+  private _requestUpdate: (() => void) | null = null;
+  private _levels: UserLevel[] = [];
+  private _currentPrice: number | null = null;
+  private _paneViews: IPrimitivePaneView[];
+  private _axisViews: readonly ISeriesPrimitiveAxisView[] = [];
+
+  constructor() {
+    this._paneViews = [new HorizontalRaysPaneView(this)];
+  }
+
+  attached(param: SeriesAttachedParameter<any>) {
+    this._chart = param.chart as any;
+    this._series = param.series;
+    this._requestUpdate = param.requestUpdate;
+    this.requestUpdate();
+  }
+
+  detached() {
+    this._chart = null;
+    this._series = null;
+    this._requestUpdate = null;
+  }
+
+  paneViews() {
+    return this._paneViews;
+  }
+
+  priceAxisViews(): readonly ISeriesPrimitiveAxisView[] {
+    return this._axisViews;
+  }
+
+  updateAllViews() {}
+
+  setLevels(levels: UserLevel[], currentPrice: number | null) {
+    this._levels = levels;
+    this._currentPrice = currentPrice;
+    this._axisViews = levels.map((lvl) => new HorizontalRaysPriceAxisView(this, lvl));
+    this.requestUpdate();
+  }
+
+  requestUpdate() {
+    if (this._requestUpdate) {
+      this._requestUpdate();
+    }
+  }
+
+  get chart() { return this._chart; }
+  get series() { return this._series; }
+  get levels() { return this._levels; }
+  get currentPrice() { return this._currentPrice; }
+}
+
 export default function TradingChart({
   symbol,
   timeframe,
@@ -53,7 +271,7 @@ export default function TradingChart({
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const levelSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
+  const raysPluginRef = useRef<HorizontalRaysPlugin | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // States
@@ -138,47 +356,7 @@ export default function TradingChart({
     return () => clearInterval(timer);
   }, [timeframe]);
 
-  // Far-future timestamp for extending level rays to the right edge
-  const FAR_FUTURE = 4102444800 as UTCTimestamp; // 2100-01-01
 
-  // Sync User Level LineSeries — native chart rendering, zero jitter
-  const syncLevelSeries = useCallback(() => {
-    const chart = chartRef.current;
-    if (!chart) return;
-
-    // Remove old level series
-    levelSeriesRef.current.forEach((s) => {
-      try { chart.removeSeries(s); } catch {}
-    });
-    levelSeriesRef.current = [];
-
-    const current = currentPriceRef.current;
-
-    userLevelsRef.current.forEach((lvl) => {
-      const dist = current ? ((lvl.price - current) / current) * 100 : 0;
-      const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}%`;
-      const priceStr = formatPrice(lvl.price);
-
-      const series = chart.addSeries(LineSeries, {
-        color: "#C084FC",
-        lineWidth: 2,
-        lineStyle: LineStyle.Dashed,
-        crosshairMarkerVisible: false,
-        lastValueVisible: true,
-        priceLineVisible: false,
-        title: `${lvl.type} $${priceStr} (${distStr})`,
-        pointMarkersVisible: true,
-        pointMarkersRadius: 4,
-      });
-
-      series.setData([
-        { time: lvl.time as UTCTimestamp, value: lvl.price },
-        { time: FAR_FUTURE, value: lvl.price },
-      ]);
-
-      levelSeriesRef.current.push(series);
-    });
-  }, [formatPrice]);
 
   // Main Chart Setup and Lifecycle (ONLY depends on symbol and timeframe!)
   useEffect(() => {
@@ -245,6 +423,12 @@ export default function TradingChart({
       },
     });
     candleSeriesRef.current = candleSeries;
+
+    // Attach native HorizontalRaysPlugin (renders directly in chart's canvas loop)
+    const raysPlugin = new HorizontalRaysPlugin();
+    raysPluginRef.current = raysPlugin;
+    raysPlugin.setLevels(userLevelsRef.current, currentPriceRef.current);
+    candleSeries.attachPrimitive(raysPlugin);
 
     // 3. Add Volume Series (Quote Volume in USDT)
     const volumeSeries = chart.addSeries(HistogramSeries, {
@@ -458,17 +642,23 @@ export default function TradingChart({
       if (wsRef.current) {
         try { wsRef.current.close(); } catch {}
       }
-      // Remove level series before destroying chart
-      levelSeriesRef.current = [];
+      if (raysPluginRef.current && candleSeriesRef.current) {
+        try {
+          candleSeriesRef.current.detachPrimitive(raysPluginRef.current);
+        } catch {}
+      }
+      raysPluginRef.current = null;
       chart.remove();
       chartRef.current = null;
     };
   }, [cleanSymbol, timeframe, saveLevels]); // STABLE DEPENDENCIES: Never re-creates chart on tool clicks!
 
-  // Sync native level LineSeries whenever userLevels or currentPrice changes
+  // Update rays plugin whenever userLevels or currentPrice changes
   useEffect(() => {
-    syncLevelSeries();
-  }, [userLevels, currentPrice, syncLevelSeries]);
+    if (raysPluginRef.current) {
+      raysPluginRef.current.setLevels(userLevels, currentPrice);
+    }
+  }, [userLevels, currentPrice]);
 
   // Render Order Book Walls as Native PriceLines (Zero Lag)
   useEffect(() => {
