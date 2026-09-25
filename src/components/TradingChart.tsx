@@ -13,19 +13,14 @@ import {
   Timer, 
   Magnet, 
   Trash2, 
-  Maximize2, 
-  TrendingUp, 
-  TrendingDown, 
   Layers, 
   BarChart3, 
-  Ruler, 
-  Plus, 
   X,
-  Zap,
-  Target
+  Target,
+  ArrowRight
 } from "lucide-react";
 import { Timeframe, TickerData, BookWall } from "../types";
-import { fetchMarketJson, parseKlines, isValidCandle, marketError, MarketCandle } from "../services/marketData";
+import { fetchMarketJson, parseKlines, isValidCandle, MarketCandle } from "../services/marketData";
 
 interface TradingChartProps {
   symbol: string; // e.g. "BTC/USDT"
@@ -41,6 +36,8 @@ interface TradingChartProps {
 interface UserLevel {
   id: string;
   price: number;
+  time: number; // Candle timestamp where the level originated
+  type: "HIGH" | "LOW";
   createdAt: number;
 }
 
@@ -52,30 +49,49 @@ export default function TradingChart({
   bookWalls = [],
 }: TradingChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Drawing and Interaction States
+  // States
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [userLevels, setUserLevels] = useState<UserLevel[]>([]);
   const [magnetMode, setMagnetMode] = useState<boolean>(true);
   const [levelToolActive, setLevelToolActive] = useState<boolean>(false);
   const [showWalls, setShowWalls] = useState<boolean>(true);
   const [showVolume, setShowVolume] = useState<boolean>(true);
-  const [rulerActive, setRulerActive] = useState<boolean>(false);
   const [chartStatus, setChartStatus] = useState<string>("Загрузка свечей...");
   const [countdown, setCountdown] = useState<string>("");
 
-  // Refs for callbacks
+  // Mutable refs to prevent chart re-initialization on state updates
   const candlesRef = useRef<MarketCandle[]>([]);
   const wallLinesRef = useRef<any[]>([]);
-  const levelLinesRef = useRef<any[]>([]);
-  const mouseCoordRef = useRef<{ time: number; price: number } | null>(null);
+  const userLevelsRef = useRef<UserLevel[]>(userLevels);
+  userLevelsRef.current = userLevels;
+  const levelToolActiveRef = useRef<boolean>(levelToolActive);
+  levelToolActiveRef.current = levelToolActive;
+  const magnetModeRef = useRef<boolean>(magnetMode);
+  magnetModeRef.current = magnetMode;
+  const currentPriceRef = useRef<number | null>(currentPrice);
+  currentPriceRef.current = currentPrice;
 
   const cleanSymbol = symbol.replace("/", "").toUpperCase();
   const tickerInfo = markets ? markets[symbol] : null;
+
+  // Format price utility
+  const formatPrice = useCallback((p: number) => {
+    if (!Number.isFinite(p) || p <= 0) return "0.00";
+    if (p >= 1000) return p.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (p >= 1) return p.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    return p.toFixed(6);
+  }, []);
+
+  const formatNotional = (n: number) => {
+    if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+    return `$${Math.round(n / 1_000)}K`;
+  };
 
   // Load saved levels from localStorage
   useEffect(() => {
@@ -121,55 +137,104 @@ export default function TradingChart({
     return () => clearInterval(timer);
   }, [timeframe]);
 
-  // Format price utility
-  const formatPrice = useCallback((p: number) => {
-    if (!Number.isFinite(p) || p <= 0) return "0.00";
-    if (p >= 1000) return p.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    if (p >= 1) return p.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
-    return p.toFixed(6);
-  }, []);
+  // Render Horizontal Rays on Overlay Canvas (Originates from specific candle to the right edge)
+  const renderOverlay = useCallback(() => {
+    const canvas = canvasRef.current;
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    if (!canvas || !chart || !series) return;
 
-  const formatNotional = (n: number) => {
-    if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-    return `$${Math.round(n / 1_000)}K`;
-  };
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
-  // Find closest candle to cursor for snapping
-  const snapToClosestCandlePeak = useCallback((rawPrice: number) => {
-    if (!candlesRef.current.length || !magnetMode) return rawPrice;
-    
-    // Look at the last 20 candles around current view
-    const recent = candlesRef.current.slice(-30);
-    let bestPrice = rawPrice;
-    let minDiff = Infinity;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
 
-    for (const c of recent) {
-      const diffHigh = Math.abs(c.high - rawPrice);
-      if (diffHigh < minDiff) {
-        minDiff = diffHigh;
-        bestPrice = c.high;
-      }
-      const diffLow = Math.abs(c.low - rawPrice);
-      if (diffLow < minDiff) {
-        minDiff = diffLow;
-        bestPrice = c.low;
-      }
+    if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
     }
 
-    // Only snap if within 0.8% distance
-    if (minDiff / rawPrice < 0.008) {
-      return bestPrice;
-    }
-    return rawPrice;
-  }, [magnetMode]);
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
 
-  // Main Chart Setup and Lifecycle
+    const timeScale = chart.timeScale();
+    const current = currentPriceRef.current;
+    const rightMargin = 60; // Stop before price scale
+
+    userLevelsRef.current.forEach((lvl) => {
+      const y = series.priceToCoordinate(lvl.price);
+      if (y === null || y < 0 || y > h) return;
+
+      // Start X from the origin candle time
+      const coord = timeScale.timeToCoordinate(lvl.time as UTCTimestamp);
+      let startX = coord !== null ? (coord as unknown as number) : 0;
+
+      const endX = w - rightMargin;
+      if (startX > endX) return; // In the future, not visible
+
+      const dist = current ? ((lvl.price - current) / current) * 100 : 0;
+      const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}%`;
+      const priceStr = formatPrice(lvl.price);
+      const label = `УРОВЕНЬ $${priceStr} (${distStr})`;
+
+      // 1. Draw horizontal ray line (starts at candle, extends ONLY to the right)
+      ctx.strokeStyle = "#C084FC"; // Neon Purple (purple-400)
+      ctx.lineWidth = 1.8;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(startX, y);
+      ctx.lineTo(endX, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 2. Draw origin dot at the exact candle High/Low
+      ctx.fillStyle = "#A855F7";
+      ctx.beginPath();
+      ctx.arc(startX, y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#FFFFFF";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      // 3. Draw badge at the right end of the ray
+      ctx.font = "bold 10px 'JetBrains Mono', monospace";
+      const textWidth = ctx.measureText(label).width;
+      const badgeW = textWidth + 12;
+      const badgeH = 18;
+      const badgeX = endX - badgeW;
+      const badgeY = y - badgeH / 2;
+
+      ctx.fillStyle = "rgba(16, 22, 31, 0.95)";
+      ctx.strokeStyle = "rgba(168, 85, 247, 0.7)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (typeof ctx.roundRect === "function") {
+        ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 3);
+      } else {
+        ctx.rect(badgeX, badgeY, badgeW, badgeH);
+      }
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = "#F3E8FF";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, badgeX + badgeW / 2, y);
+    });
+
+    ctx.restore();
+  }, [formatPrice]);
+
+  // Main Chart Setup and Lifecycle (ONLY depends on symbol and timeframe!)
   useEffect(() => {
     if (!containerRef.current) return;
     let isDisposed = false;
     const abortCtrl = new AbortController();
 
-    // 1. Create Lightweight Chart
+    // 1. Create Lightweight Chart instance
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth || 800,
       height: containerRef.current.clientHeight || 520,
@@ -201,7 +266,7 @@ export default function TradingChart({
         autoScale: true,
         scaleMargins: {
           top: 0.08,
-          bottom: 0.22, // Space for volume histogram
+          bottom: 0.22,
         },
       },
       timeScale: {
@@ -213,7 +278,7 @@ export default function TradingChart({
 
     chartRef.current = chart;
 
-    // 2. Add Candlestick Series (High-Contrast Scalper Styling)
+    // 2. Add Candlestick Series
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: "#22C55E",
       downColor: "#EF4444",
@@ -247,17 +312,23 @@ export default function TradingChart({
       visible: false,
     });
 
-    // 4. Resize Observer
+    // 4. Resize and Canvas sync
     const resizeObserver = new ResizeObserver((entries) => {
       if (!entries.length || isDisposed) return;
       const { width, height } = entries[0].contentRect;
       chart.resize(width, height);
+      renderOverlay();
     });
     resizeObserver.observe(containerRef.current);
 
+    // Sync overlay on chart zoom and pan
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      renderOverlay();
+    });
+
     // 5. Initial Historical Klines Fetch (500 bars)
     const loadHistory = async () => {
-      setChartStatus("Загрузка 500 свечей Binance...");
+      setChartStatus("Загрузка свечей Binance...");
       try {
         const raw = await fetchMarketJson(
           `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${timeframe}&limit=500`,
@@ -273,7 +344,6 @@ export default function TradingChart({
         const last = candles[candles.length - 1];
         setCurrentPrice(last.close);
 
-        // Adjust decimal precision automatically
         const priceStr = last.close.toString();
         const decimals = priceStr.includes(".") ? priceStr.split(".")[1].length : 2;
         candleSeries.applyOptions({
@@ -295,17 +365,16 @@ export default function TradingChart({
           }))
         );
 
-        // Calculate 20-period moving average of volume for Spike Detection
+        // Volume with Spike Detection (> 1.8x SMA20)
         const volData = candles.map((c, i) => {
           const slice = candles.slice(Math.max(0, i - 20), i);
           const avgVol = slice.length ? slice.reduce((acc, curr) => acc + curr.volume, 0) / slice.length : c.volume;
           const isSpike = c.volume > avgVol * 1.8;
           const isUp = c.close >= c.open;
 
-          // Color: High-contrast green/red, and gold for volume spikes!
           let color = isUp ? "rgba(34, 197, 94, 0.65)" : "rgba(239, 68, 68, 0.65)";
           if (isSpike) {
-            color = isUp ? "#EAB308" : "#F97316"; // Gold (Up) or Bright Orange (Down) Spike!
+            color = isUp ? "#EAB308" : "#F97316"; // Gold (Up) or Orange (Down) Spike
           }
 
           return {
@@ -318,6 +387,7 @@ export default function TradingChart({
         volumeSeries.setData(volData);
         chart.timeScale().fitContent();
         setChartStatus("Binance Futures: Live");
+        setTimeout(renderOverlay, 50);
       } catch (err) {
         if (!isDisposed) {
           setChartStatus("Ошибка загрузки истории Binance");
@@ -384,27 +454,58 @@ export default function TradingChart({
                 if (cache.length > 1000) cache.shift();
               }
             }
+
+            renderOverlay();
           }
         } catch {}
       };
     });
 
-    // 7. Click listener on chart to place levels
+    // 7. Click listener on chart to place levels (Uses refs, NEVER causes chart remount!)
     chart.subscribeClick((param) => {
       if (!param.point || !param.time || !candleSeriesRef.current) return;
-      const clickedPrice = candleSeriesRef.current.coordinateToPrice(param.point.y);
-      if (clickedPrice === null) return;
+      if (!levelToolActiveRef.current) return;
 
-      if (levelToolActive) {
-        const finalPrice = snapToClosestCandlePeak(clickedPrice);
-        const newLevel: UserLevel = {
-          id: `level_${Date.now()}`,
-          price: finalPrice,
-          createdAt: Date.now(),
-        };
-        saveLevels([...userLevels, newLevel]);
-        setLevelToolActive(false); // Turn off after placing
+      const rawPrice = candleSeriesRef.current.coordinateToPrice(param.point.y);
+      if (rawPrice === null) return;
+      const clickedPrice = Number(rawPrice);
+
+      const clickedTime = Number(param.time);
+      let finalPrice = clickedPrice;
+      let finalTime = clickedTime;
+      let levelType: "HIGH" | "LOW" = "HIGH";
+
+      if (magnetModeRef.current && candlesRef.current.length) {
+        // Find candle at this clicked time or closest
+        const candle = candlesRef.current.find((c) => c.time === clickedTime) || 
+          candlesRef.current.reduce((prev, curr) => Math.abs(curr.time - clickedTime) < Math.abs(prev.time - clickedTime) ? curr : prev);
+
+        if (candle) {
+          const diffHigh = Math.abs(candle.high - clickedPrice);
+          const diffLow = Math.abs(candle.low - clickedPrice);
+
+          if (diffHigh <= diffLow) {
+            finalPrice = candle.high;
+            levelType = "HIGH";
+          } else {
+            finalPrice = candle.low;
+            levelType = "LOW";
+          }
+          finalTime = candle.time;
+        }
       }
+
+      const newLevel: UserLevel = {
+        id: `level_${Date.now()}`,
+        price: finalPrice,
+        time: finalTime,
+        type: levelType,
+        createdAt: Date.now(),
+      };
+
+      const updated = [...userLevelsRef.current, newLevel];
+      saveLevels(updated);
+      setLevelToolActive(false); // Turn off tool after single placement
     });
 
     return () => {
@@ -417,44 +518,18 @@ export default function TradingChart({
       chart.remove();
       chartRef.current = null;
     };
-  }, [cleanSymbol, timeframe, saveLevels, levelToolActive, snapToClosestCandlePeak, userLevels]);
+  }, [cleanSymbol, timeframe, renderOverlay, saveLevels]); // STABLE DEPENDENCIES: Never re-creates chart on tool clicks!
 
-  // Render User Levels as Native Lightweight Charts PriceLines (Zero Lag!)
+  // Re-render rays overlay whenever userLevels or currentPrice changes
+  useEffect(() => {
+    renderOverlay();
+  }, [userLevels, currentPrice, renderOverlay]);
+
+  // Render Order Book Walls as Native PriceLines (Zero Lag)
   useEffect(() => {
     const series = candleSeriesRef.current;
     if (!series) return;
 
-    // Clear existing user level price lines
-    levelLinesRef.current.forEach((line) => {
-      try { series.removePriceLine(line); } catch {}
-    });
-    levelLinesRef.current = [];
-
-    // Draw active user levels
-    userLevels.forEach((lvl) => {
-      const dist = currentPrice ? ((lvl.price - currentPrice) / currentPrice) * 100 : 0;
-      const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}%`;
-
-      try {
-        const line = series.createPriceLine({
-          price: lvl.price,
-          color: "#A855F7", // Neon Purple
-          lineWidth: 2,
-          lineStyle: LineStyle.Solid,
-          axisLabelVisible: true,
-          title: `УРОВЕНЬ $${formatPrice(lvl.price)} (${distStr})`,
-        });
-        levelLinesRef.current.push(line);
-      } catch {}
-    });
-  }, [userLevels, currentPrice, formatPrice]);
-
-  // Render Order Book Walls as Native PriceLines (Zero Lag, Perfectly Synced!)
-  useEffect(() => {
-    const series = candleSeriesRef.current;
-    if (!series) return;
-
-    // Clear old wall lines
     wallLinesRef.current.forEach((line) => {
       try { series.removePriceLine(line); } catch {}
     });
@@ -462,26 +537,24 @@ export default function TradingChart({
 
     if (!showWalls || !bookWalls.length) return;
 
-    // Render up to 6 largest walls
     bookWalls.slice(0, 6).forEach((wall) => {
       const isBid = wall.side === "bid";
       const isSolid = wall.status === "solid" || wall.ageSeconds >= 180;
       const isConfirmed = wall.status === "confirmed" || wall.ageSeconds >= 60;
 
-      // Color and line styling
       let color = isBid ? "#22C55E" : "#EF4444";
       let lineWidth = 1;
       let lineStyle = LineStyle.Dashed;
 
       if (isSolid) {
-        color = "#F59E0B"; // Gold for 3m+
+        color = "#F59E0B";
         lineWidth = 2;
         lineStyle = LineStyle.Solid;
       } else if (isConfirmed) {
         lineWidth = 2;
         lineStyle = LineStyle.Dashed;
       } else {
-        color = "#64748B"; // Slate for unconfirmed
+        color = "#64748B";
       }
 
       const ageStr = wall.ageSeconds >= 60 
@@ -506,7 +579,7 @@ export default function TradingChart({
         wallLinesRef.current.push(line);
       } catch {}
     });
-  }, [bookWalls, showWalls, formatPrice]);
+  }, [bookWalls, showWalls]);
 
   // Toggle Volume visibility
   useEffect(() => {
@@ -574,14 +647,14 @@ export default function TradingChart({
           <button
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-semibold transition-all ${
               levelToolActive 
-                ? "bg-purple-950/60 border-purple-500 text-purple-300 ring-2 ring-purple-500/20" 
+                ? "bg-purple-950/80 border-purple-500 text-purple-300 ring-2 ring-purple-500/30" 
                 : "bg-[#141C26] border-[#1E2936] text-slate-300 hover:border-slate-600"
             }`}
             onClick={() => setLevelToolActive(!levelToolActive)}
-            title="Кликните на график, чтобы поставить уровень (магнитится к High/Low)"
+            title="Кликните на вершину свечи, чтобы провести уровень вправо (луч)"
           >
             <Target size={13} className={levelToolActive ? "text-purple-400 animate-pulse" : "text-slate-400"} />
-            <span>{levelToolActive ? "Кликните на график..." : "Уровень (H)"}</span>
+            <span>{levelToolActive ? "Кликните на хай/лоу..." : "Уровень (H)"}</span>
           </button>
 
           {/* Magnet Snap Toggle */}
@@ -592,7 +665,7 @@ export default function TradingChart({
                 : "bg-[#141C26] border-[#1E2936] text-slate-500 hover:text-slate-300"
             }`}
             onClick={() => setMagnetMode(!magnetMode)}
-            title={`Магнит к вершинам свечей: ${magnetMode ? "ВКЛ" : "ВЫКЛ"}`}
+            title={`Магнит к вершинам свечей: ${magnetMode ? "ВКЛ (привязка к High/Low)" : "ВЫКЛ"}`}
           >
             <Magnet size={14} />
           </button>
@@ -613,7 +686,7 @@ export default function TradingChart({
 
           {/* Volumes Toggle */}
           <button
-            className={`flex items-center gap-1 px-2 py-1 rounded border text-[11px] font-semibold transition-colors ${
+            className={`flex items-center gap-1 px-2.5 py-1 rounded border text-[11px] font-semibold transition-colors ${
               showVolume 
                 ? "bg-[#141C26] border-slate-700 text-slate-200" 
                 : "bg-[#141C26] border-[#1E2936] text-slate-500"
@@ -640,20 +713,28 @@ export default function TradingChart({
 
       {/* Main Chart Canvas Container */}
       <div className="relative flex-1 w-full h-full min-h-0">
+        {/* TradingView Chart Container */}
         <div ref={containerRef} className="w-full h-full" />
+
+        {/* Lightweight Horizontal Rays Canvas Overlay */}
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 pointer-events-none z-10 w-full h-full"
+        />
 
         {/* Floating Active Levels Pills (Quick Delete) */}
         {userLevels.length > 0 && (
-          <div className="absolute top-2 left-2 z-10 flex flex-wrap gap-1.5 max-w-xl pointer-events-auto">
+          <div className="absolute top-2 left-2 z-20 flex flex-wrap gap-1.5 max-w-xl pointer-events-auto">
             {userLevels.map((lvl) => (
               <span
                 key={lvl.id}
-                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#10161F]/90 border border-purple-500/40 text-purple-300 font-mono text-[11px] backdrop-blur-sm"
+                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#10161F]/90 border border-purple-500/40 text-purple-300 font-mono text-[11px] backdrop-blur-sm shadow-md"
               >
                 <span>${formatPrice(lvl.price)}</span>
+                <span className="text-[10px] text-slate-400">({lvl.type})</span>
                 <button
                   onClick={() => deleteLevel(lvl.id)}
-                  className="hover:text-rose-400 text-slate-500 transition-colors"
+                  className="hover:text-rose-400 text-slate-500 transition-colors ml-0.5"
                   title="Удалить этот уровень"
                 >
                   <X size={11} />
@@ -665,7 +746,7 @@ export default function TradingChart({
 
         {/* Volume Legend Tip */}
         {showVolume && (
-          <div className="absolute bottom-2 left-3 z-10 text-[10px] text-slate-500 font-mono flex items-center gap-2 pointer-events-none">
+          <div className="absolute bottom-2 left-3 z-20 text-[10px] text-slate-500 font-mono flex items-center gap-2 pointer-events-none">
             <span>Объём в USDT ($)</span>
             <span className="flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-yellow-400" />
