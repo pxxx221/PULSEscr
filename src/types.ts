@@ -73,4 +73,15 @@ export interface LiquidityFilterConfig {
   excludeBlacklisted: boolean;
 }
 
+export interface BookWall {
+  symbol: string;
+  side: "bid" | "ask";
+  price: number;
+  notional: number;
+  ageSeconds: number;
+  relativeSize: number;
+  distancePercent: number;
+  status: "observing" | "confirmed";
+}
+
 

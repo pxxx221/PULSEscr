@@ -8,11 +8,13 @@ import ScreenerSidebar from "./components/ScreenerSidebar";
 import ScannerRadar from "./components/ScannerRadar";
 import ExportCodeModal from "./components/ExportCodeModal";
 import TelegramTestButton from "./components/TelegramTestButton";
+import DensityMapTab from "./components/DensityMapTab";
 import { useTelegramAlertWatcher } from "./hooks/useTelegramAlertWatcher";
 import { useOrderBookWalls } from "./hooks/useOrderBookWalls";
 import { FlowSnapshot } from "./utils/flowMonitor";
 import { Bell, Settings2, UserRound, X, TrendingUp, Activity, Flame, ShieldAlert, Zap, Layers, RefreshCw, Layers2, PieChart, Sparkles, Layout, ChevronLeft, ChevronRight, Search, CornerDownLeft, Target, Download } from "lucide-react";
 export default function App() {
+  const [activeView, setActiveView] = useState<"terminal" | "density-map">("terminal");
   const [profileOpen, setProfileOpen] = useState(false);
   const [markets, setMarkets] = useState<Record<string, TickerData>>({});
   const [currentCoin, setCurrentCoin] = useState<string>("BTC/USDT");
@@ -495,16 +497,37 @@ export default function App() {
       : currentSort === "$" ? markets[b].volume - markets[a].volume
       : Math.abs(markets[b].change) - Math.abs(markets[a].change));
     const searched = searchQuery ? keys.filter((key) => key.includes(searchQuery)) : keys;
-    const symbols = [...new Set([currentCoin, ...favorites, ...searched.slice(0, 40)])].slice(0, 45);
+    const symbols = [...new Set([currentCoin, ...favorites, ...searched.slice(0, 60)])].slice(0, 65);
     wallRosterRef.current = { key: rosterKey, symbols };
     return symbols;
   }, [markets, currentCoin, favorites, currentSort, minVolume, searchQuery]);
   const bookWalls = useOrderBookWalls(wallSymbols, markets);
 
+  const totalWallsCount = useMemo(() => {
+    return Object.values(bookWalls).reduce((sum, list) => sum + list.length, 0);
+  }, [bookWalls]);
+
   return (
     <div className="pulse-app">
       <header className="pulse-topbar">
         <a className="pulse-brand" href="/" aria-label="PULSE home"><Activity size={25} strokeWidth={2.5}/><span>PULSE</span><small>TERMINAL</small></a>
+        <div className="pulse-nav-tabs">
+          <button
+            className={`pulse-nav-tab ${activeView === 'terminal' ? 'active' : ''}`}
+            onClick={() => setActiveView('terminal')}
+            title="Терминал: График и сайдбар"
+          >
+            <Activity size={14} /> <span>Терминал</span>
+          </button>
+          <button
+            className={`pulse-nav-tab ${activeView === 'density-map' ? 'active' : ''}`}
+            onClick={() => setActiveView('density-map')}
+            title="Карта плотностей: крупные лимитные заявки в стаканах"
+          >
+            <Layers size={14} /> <span>Карта плотностей</span>
+            {totalWallsCount > 0 && <span className="pulse-tab-badge">{totalWallsCount}</span>}
+          </button>
+        </div>
         <div className="pulse-global-stats">
           <span>Futures <b>{globalStats.totalPairs || '—'}</b></span>
           <span>24H Volume <b>{'$'}{globalStats.totalVolumeB.toFixed(1)}B</b></span>
@@ -519,21 +542,36 @@ export default function App() {
         {profileOpen && <div className="pulse-profile"><b>Local workspace</b><p>Избранное и настройки сохраняются в этом браузере.</p><button onClick={()=>setProfileOpen(false)}>Закрыть</button></div>}
       </header>
       {marketFailure && <div role="alert" className="pulse-warning">Статистика Binance недоступна: {marketFailure}. {lastRefreshed ? 'Показан последний полученный снимок: '+lastRefreshed.toLocaleTimeString() : 'Рыночные данные ещё не получены.'}</div>}
-      <main className="pulse-workspace">
-        <aside className="pulse-market-panel">
-          <ScreenerSidebar markets={markets} currentCoin={currentCoin} selectCoin={selectCoin}
-            favorites={favorites} toggleFav={toggleFav} currentSort={currentSort} setSortMode={setSortMode}
-            minVolume={minVolume} setMinVolume={setMinVolume} squeezeSensitivity={squeezeSensitivity}
-            setSqueezeSensitivity={setSqueezeSensitivity} alertThreshold={alertThreshold} setAlertThreshold={setAlertThreshold}
-            radarOn={radarOn} setRadarOn={setRadarOn} searchQuery={searchQuery} setSearchQuery={setSearchQuery}
-            pushedSymbols={pushedSymbols} activeCoinPools={activeCoinPools} gravityShieldSymbols={gravityShieldSymbols} bookWalls={bookWalls}/>
-        </aside>
-        <section className="pulse-main">
-          <FlowStrip item={flowBySymbol[currentCoin.replace('/', '')]} />
-          <TradingChart symbol={currentCoin} timeframe={timeframe} setTimeframe={setTimeframe}
-            squeezeSensitivity={squeezeSensitivity} markets={markets} onPoolsChange={setActiveCoinPools} confirmedLevel={selectedConfirmedLevel} bookWalls={bookWalls[currentCoin] || []}/>
-        </section>
-      </main>
+      {activeView === "terminal" ? (
+        <main className="pulse-workspace">
+          <aside className="pulse-market-panel">
+            <ScreenerSidebar markets={markets} currentCoin={currentCoin} selectCoin={selectCoin}
+              favorites={favorites} toggleFav={toggleFav} currentSort={currentSort} setSortMode={setSortMode}
+              minVolume={minVolume} setMinVolume={setMinVolume} squeezeSensitivity={squeezeSensitivity}
+              setSqueezeSensitivity={setSqueezeSensitivity} alertThreshold={alertThreshold} setAlertThreshold={setAlertThreshold}
+              radarOn={radarOn} setRadarOn={setRadarOn} searchQuery={searchQuery} setSearchQuery={setSearchQuery}
+              pushedSymbols={pushedSymbols} activeCoinPools={activeCoinPools} gravityShieldSymbols={gravityShieldSymbols} bookWalls={bookWalls}/>
+          </aside>
+          <section className="pulse-main">
+            <FlowStrip item={flowBySymbol[currentCoin.replace('/', '')]} />
+            <TradingChart symbol={currentCoin} timeframe={timeframe} setTimeframe={setTimeframe}
+              squeezeSensitivity={squeezeSensitivity} markets={markets} onPoolsChange={setActiveCoinPools} confirmedLevel={selectedConfirmedLevel} bookWalls={bookWalls[currentCoin] || []}/>
+          </section>
+        </main>
+      ) : (
+        <main className="flex-1 min-h-0 flex overflow-hidden">
+          <DensityMapTab
+            bookWalls={bookWalls}
+            markets={markets}
+            currentCoin={currentCoin}
+            onSelectCoin={selectCoin}
+            onOpenChart={(symbol) => {
+              selectCoin(symbol);
+              setActiveView("terminal");
+            }}
+          />
+        </main>
+      )}
       <ScannerRadar markets={markets} selectCoin={selectCoin} radarOn={radarOn} alertThreshold={alertThreshold} currentCoin={currentCoin} onFlowSnapshot={onFlowSnapshot}/>
       <footer className="pulse-footer"><span className={feedStatus === 'LIVE' ? 'pulse-connected' : ''}>●</span><span>{feedStatus === 'LIVE' ? 'Binance connected' : 'Connecting to Binance'}</span><span>USDⓈ-M Futures</span><span className="pulse-footer-right">Snapshot {lastRefreshed?.toLocaleTimeString() || '—'} <button title="Обновить статистику рынка" aria-label="Refresh markets" onClick={loadFuturesMarkets} disabled={isLoading}><RefreshCw size={12} className={isLoading ? 'animate-spin' : ''}/></button></span><span>PULSE <b>1.0</b></span></footer>
     </div>

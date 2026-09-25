@@ -10,7 +10,7 @@ export function useOrderBookWalls(symbols: string[], markets: Record<string, Tic
   const symbolKey = [...new Set(symbols)].sort().join("|");
 
   useEffect(() => {
-    const monitored = symbolKey.split("|").filter(Boolean).slice(0, 45);
+    const monitored = symbolKey.split("|").filter(Boolean).slice(0, 65);
     if (!monitored.length) return;
     let socket: WebSocket | null = null;
     let retry: number | undefined;
