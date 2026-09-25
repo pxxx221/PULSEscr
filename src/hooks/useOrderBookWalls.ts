@@ -29,7 +29,7 @@ export function useOrderBookWalls(symbols: string[], markets: Record<string, Tic
     const connect = () => {
       if (stopped) return;
       const streams = monitored.map((symbol) => `${symbol.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()}@depth20@500ms`).join("/");
-      socket = new WebSocket(`wss://fstream.binance.com/public/stream?streams=${streams}`);
+      socket = new WebSocket(`wss://fstream.binance.com/stream?streams=${streams}`);
       socket.onopen = () => { attempts = 0; };
       socket.onmessage = (event) => {
         try {

@@ -250,6 +250,9 @@ export default function ScreenerSidebar({
 
     const isFav = favorites.includes(key);
     const nearestWall = (bookWalls[key] || []).slice().sort((a, b) => a.distancePercent - b.distancePercent)[0];
+    const bestBidWall = (bookWalls[key] || []).filter(w => w.side === 'bid').sort((a, b) => b.notional - a.notional)[0];
+    const bestAskWall = (bookWalls[key] || []).filter(w => w.side === 'ask').sort((a, b) => b.notional - a.notional)[0];
+    const wallIndicators = [bestBidWall, bestAskWall].filter(Boolean);
 
     const domino = isActive 
       ? calculateDominoScore(activeCoinPools)
@@ -257,11 +260,13 @@ export default function ScreenerSidebar({
 
     const gravityShield = gravityShieldSymbols[key];
 
+    const formatWallSize = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1_000)}K`;
+
     return (
       <div key={key} className={'pulse-market-row '+(isActive?'is-selected':'')}>
         <button className={'pulse-favorite '+(isFav?'is-favorite':'')} aria-label={'Favorite '+key} onClick={()=>toggleFav(key)}><Star size={12}/></button>
         <button className="pulse-market-select" onClick={()=>selectCoin(key)} aria-pressed={isActive}>
-          <span className="pulse-market-symbol">{key.split('/')[0]} {hotAltSymbolsSet.has(key) && <Flame size={11} className="pulse-hot-icon"/>}{nearestWall && <span className="pulse-level-indicator" style={{ color: nearestWall.status === 'confirmed' ? (nearestWall.side === 'bid' ? '#32B79A' : '#E66A78') : '#8A9BAF' }} title={`${nearestWall.status === 'confirmed' ? 'Устойчивая' : 'Наблюдается'} · ${nearestWall.side === 'bid' ? 'Покупка' : 'Продажа'} · $${nearestWall.price} · $${Math.round(nearestWall.notional).toLocaleString('en-US')} · держится ${nearestWall.ageSeconds} с`}>{nearestWall.status === 'confirmed' ? '▰' : '◇'} <small>{nearestWall.side === 'bid' ? 'BID' : 'ASK'}</small></span>}{pushedSymbols[key] && <i className={pushedSymbols[key].type==='LONG'?'positive-dot':'negative-dot'}/>}</span>
+          <span className="pulse-market-symbol">{key.split('/')[0]} {hotAltSymbolsSet.has(key) && <Flame size={11} className="pulse-hot-icon"/>}{wallIndicators.map((w, i) => <span key={i} className="pulse-level-indicator" style={{ color: w.status === 'confirmed' ? (w.side === 'bid' ? '#32B79A' : '#E66A78') : '#8A9BAF' }} title={`${w.status === 'confirmed' ? 'Устойчивая плотность' : 'Наблюдается'} · ${w.side === 'bid' ? 'Покупка' : 'Продажа'} · $${w.price} · $${Math.round(w.notional).toLocaleString('en-US')} · держится ${w.ageSeconds}с`}>{w.status === 'confirmed' ? '▰' : '◇'}<small>{w.side === 'bid' ? 'B' : 'A'} {formatWallSize(w.notional)}</small></span>)}{pushedSymbols[key] && <i className={pushedSymbols[key].type==='LONG'?'positive-dot':'negative-dot'}/>}</span>
           <span className={info.change>=0?'positive':'negative'}>{info.change>=0?'+':''}{info.change.toFixed(2)}%</span>
           <span className="pulse-row-price">{'$'}{formattedPrice}</span><span className="pulse-row-volume">{'$'}{formattedVol}</span>
         </button>
