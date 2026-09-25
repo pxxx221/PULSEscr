@@ -33,9 +33,11 @@ export function isValidCandle(c: MarketCandle): boolean {
 export function parseKlines(raw: unknown): MarketCandle[] {
   if (!Array.isArray(raw) || raw.length === 0) throw new Error('Binance: пустой ответ свечей');
   const candles = raw.map((row: unknown) => {
-    if (!Array.isArray(row) || row.length < 6) throw new Error('Binance: неверный формат свечи');
+    const quoteVol = Number(row[7]);
+    const baseVol = Number(row[5]);
+    const vol = Number.isFinite(quoteVol) && quoteVol > 0 ? quoteVol : (Number.isFinite(baseVol) ? baseVol : 0);
     const c = { time: Math.floor(Number(row[0]) / 1000), open: Number(row[1]), high: Number(row[2]),
-      low: Number(row[3]), close: Number(row[4]), volume: Number(row[5]) };
+      low: Number(row[3]), close: Number(row[4]), volume: vol };
     if (!isValidCandle(c)) throw new Error('Binance: некорректная свеча');
     return c;
   });
