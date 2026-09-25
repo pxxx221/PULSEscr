@@ -9,10 +9,8 @@ import {
   LineStyle,
   CrosshairMode,
   ISeriesPrimitive,
-  SeriesAttachedParameter,
   IPrimitivePaneView,
-  IPrimitivePaneRenderer,
-  ISeriesPrimitiveAxisView
+  IPrimitivePaneRenderer
 } from "lightweight-charts";
 import { 
   Timer, 
@@ -46,130 +44,86 @@ interface UserLevel {
   createdAt: number;
 }
 
-// Native Lightweight Charts Plugin for Horizontal Ray Levels
-class HorizontalRaysPriceAxisView implements ISeriesPrimitiveAxisView {
-  private _source: HorizontalRaysPlugin;
-  private _level: UserLevel;
-
-  constructor(source: HorizontalRaysPlugin, level: UserLevel) {
-    this._source = source;
-    this._level = level;
-  }
-
-  coordinate(): number {
-    const series = this._source.series;
-    if (!series) return -9999;
-    const y = series.priceToCoordinate(this._level.price);
-    return y !== null ? Number(y) : -9999;
-  }
-
-  text(): string {
-    const p = this._level.price;
-    if (p >= 1000) return p.toFixed(2);
-    if (p >= 1) return p.toFixed(4);
-    return p.toFixed(6);
-  }
-
-  textColor(): string {
-    return "#FFFFFF";
-  }
-
-  backColor(): string {
-    return "#9333EA";
-  }
-
-  visible(): boolean {
-    return true;
-  }
+interface RayPoint {
+  x: number | null;
+  y: number | null;
+  price: number;
+  time: number;
+  type: "HIGH" | "LOW";
 }
 
-class HorizontalRaysRenderer implements IPrimitivePaneRenderer {
-  private _source: HorizontalRaysPlugin;
+class HorizontalRayPaneRenderer implements IPrimitivePaneRenderer {
+  private _points: RayPoint[];
+  private _currentPrice: number | null;
 
-  constructor(source: HorizontalRaysPlugin) {
-    this._source = source;
+  constructor(points: RayPoint[], currentPrice: number | null) {
+    this._points = points;
+    this._currentPrice = currentPrice;
   }
 
   draw(target: any) {
-    target.useMediaCoordinateSpace((scope: { context: CanvasRenderingContext2D; mediaSize: { width: number; height: number } }) => {
-      const { context: ctx, mediaSize } = scope;
-      const chart = this._source.chart;
-      const series = this._source.series;
-      if (!chart || !series) return;
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx = scope.context;
+      const hpr = scope.horizontalPixelRatio || 1;
+      const vpr = scope.verticalPixelRatio || 1;
+      const width = scope.bitmapSize.width;
 
-      const timeScale = chart.timeScale();
-      const current = this._source.currentPrice;
-      const levels = this._source.levels;
-      if (!levels || !levels.length) return;
+      for (const pt of this._points) {
+        if (pt.y === null) continue;
 
-      const w = mediaSize.width;
-      const h = mediaSize.height;
-
-      ctx.save();
-
-      for (const lvl of levels) {
-        const y = series.priceToCoordinate(lvl.price);
-        if (y === null || y < -20 || y > h + 20) continue;
-
-        // Find candle start coordinate
-        const coord = timeScale.timeToCoordinate(lvl.time as UTCTimestamp);
-        
-        // If candle is to the right of the visible screen (future), don't draw
-        if (coord !== null && (coord as unknown as number) > w) continue;
-
-        // If candle is scrolled off to the left (coord < 0 or coord === null),
-        // start at 0 (left edge of chart) so the line stays visible as you scroll right!
-        const startX = (coord !== null && (coord as unknown as number) > 0) ? (coord as unknown as number) : 0;
-        const endX = w; // Extends all the way to right edge of the chart pane!
+        const yScaled = Math.round(pt.y * vpr);
+        // Start X: if candle is visible, start at candle X; if scrolled left, start at 0
+        const startX = pt.x !== null ? Math.max(0, Math.round(pt.x * hpr)) : 0;
+        const endX = width; // Draw all the way to the right edge!
 
         if (startX >= endX) continue;
 
-        const dist = current ? ((lvl.price - current) / current) * 100 : 0;
-        const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}%`;
-        const priceStr = lvl.price >= 1000 
-          ? lvl.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-          : lvl.price >= 1 
-          ? lvl.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })
-          : lvl.price.toFixed(6);
-
-        const label = `${lvl.type} $${priceStr} (${distStr})`;
-
-        // 1. Draw horizontal ray line from startX to endX
-        ctx.strokeStyle = "#C084FC"; // Neon Purple (purple-400)
-        ctx.lineWidth = 1.8;
-        ctx.setLineDash([6, 4]);
+        // 1. Draw horizontal dashed ray
+        ctx.strokeStyle = "#C084FC"; // Purple
+        ctx.lineWidth = Math.round(1.8 * vpr);
+        ctx.setLineDash([Math.round(6 * hpr), Math.round(4 * hpr)]);
         ctx.beginPath();
-        ctx.moveTo(startX, y);
-        ctx.lineTo(endX, y);
+        ctx.moveTo(startX, yScaled);
+        ctx.lineTo(endX, yScaled);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // 2. Draw origin dot at the exact candle High/Low (only if origin candle is on screen)
-        if (coord !== null && (coord as unknown as number) >= 0 && (coord as unknown as number) <= w) {
-          const originX = coord as unknown as number;
+        // 2. Draw origin dot at the exact candle High/Low
+        if (pt.x !== null && pt.x >= 0 && pt.x <= (scope.mediaSize?.width || width)) {
+          const originX = Math.round(pt.x * hpr);
           ctx.fillStyle = "#A855F7";
           ctx.beginPath();
-          ctx.arc(originX, y, 4, 0, Math.PI * 2);
+          ctx.arc(originX, yScaled, Math.round(4 * vpr), 0, Math.PI * 2);
           ctx.fill();
           ctx.strokeStyle = "#FFFFFF";
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = Math.round(1.5 * vpr);
           ctx.stroke();
         }
 
         // 3. Draw badge at the right end of the ray
-        ctx.font = "bold 10px 'JetBrains Mono', monospace";
+        const dist = this._currentPrice ? ((pt.price - this._currentPrice) / this._currentPrice) * 100 : 0;
+        const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}%`;
+        const priceStr = pt.price >= 1000 
+          ? pt.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : pt.price >= 1 
+          ? pt.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+          : pt.price.toFixed(6);
+
+        const label = `${pt.type} $${priceStr} (${distStr})`;
+        const fontSize = Math.round(11 * vpr);
+        ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`;
         const textWidth = ctx.measureText(label).width;
-        const badgeW = textWidth + 12;
-        const badgeH = 18;
-        const badgeX = endX - badgeW - 6;
-        const badgeY = y - badgeH / 2;
+        const badgeW = textWidth + Math.round(14 * hpr);
+        const badgeH = Math.round(20 * vpr);
+        const badgeX = endX - badgeW - Math.round(6 * hpr);
+        const badgeY = yScaled - badgeH / 2;
 
         ctx.fillStyle = "rgba(16, 22, 31, 0.95)";
         ctx.strokeStyle = "rgba(168, 85, 247, 0.8)";
-        ctx.lineWidth = 1;
+        ctx.lineWidth = Math.round(1 * vpr);
         ctx.beginPath();
         if (typeof ctx.roundRect === "function") {
-          ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 3);
+          ctx.roundRect(badgeX, badgeY, badgeW, badgeH, Math.round(4 * vpr));
         } else {
           ctx.rect(badgeX, badgeY, badgeW, badgeH);
         }
@@ -179,79 +133,74 @@ class HorizontalRaysRenderer implements IPrimitivePaneRenderer {
         ctx.fillStyle = "#F3E8FF";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(label, badgeX + badgeW / 2, y);
+        ctx.fillText(label, badgeX + badgeW / 2, yScaled);
       }
-
-      ctx.restore();
     });
   }
 }
 
-class HorizontalRaysPaneView implements IPrimitivePaneView {
-  private _source: HorizontalRaysPlugin;
-  private _renderer: HorizontalRaysRenderer;
+class HorizontalRayPaneView implements IPrimitivePaneView {
+  private _source: HorizontalRayPrimitive;
+  private _points: RayPoint[] = [];
 
-  constructor(source: HorizontalRaysPlugin) {
+  constructor(source: HorizontalRayPrimitive) {
     this._source = source;
-    this._renderer = new HorizontalRaysRenderer(source);
   }
 
-  zOrder(): "normal" {
-    return "normal";
+  update() {
+    const series = this._source.series;
+    const chart = this._source.chart;
+    if (!series || !chart) {
+      this._points = [];
+      return;
+    }
+
+    const timeScale = chart.timeScale();
+    const levels = this._source.levels;
+
+    this._points = levels.map((lvl) => {
+      const y = series.priceToCoordinate(lvl.price);
+      const x = timeScale.timeToCoordinate(lvl.time as UTCTimestamp);
+      return {
+        x: x !== null ? Number(x) : null,
+        y: y !== null ? Number(y) : null,
+        price: lvl.price,
+        time: lvl.time,
+        type: lvl.type,
+      };
+    });
   }
 
   renderer(): IPrimitivePaneRenderer {
-    return this._renderer;
+    return new HorizontalRayPaneRenderer(this._points, this._source.currentPrice);
   }
 }
 
-class HorizontalRaysPlugin implements ISeriesPrimitive {
-  private _chart: IChartApi | null = null;
-  private _series: ISeriesApi<any> | null = null;
-  private _requestUpdate: (() => void) | null = null;
+class HorizontalRayPrimitive implements ISeriesPrimitive {
+  private _chart: IChartApi;
+  private _series: ISeriesApi<any>;
   private _levels: UserLevel[] = [];
   private _currentPrice: number | null = null;
-  private _paneViews: IPrimitivePaneView[];
-  private _axisViews: readonly ISeriesPrimitiveAxisView[] = [];
+  private _paneViews: HorizontalRayPaneView[];
 
-  constructor() {
-    this._paneViews = [new HorizontalRaysPaneView(this)];
+  constructor(chart: IChartApi, series: ISeriesApi<any>) {
+    this._chart = chart;
+    this._series = series;
+    this._paneViews = [new HorizontalRayPaneView(this)];
   }
 
-  attached(param: SeriesAttachedParameter<any>) {
-    this._chart = param.chart as any;
-    this._series = param.series;
-    this._requestUpdate = param.requestUpdate;
-    this.requestUpdate();
-  }
-
-  detached() {
-    this._chart = null;
-    this._series = null;
-    this._requestUpdate = null;
+  updateAllViews() {
+    this._paneViews.forEach((pv) => pv.update());
   }
 
   paneViews() {
     return this._paneViews;
   }
 
-  priceAxisViews(): readonly ISeriesPrimitiveAxisView[] {
-    return this._axisViews;
-  }
-
-  updateAllViews() {}
-
   setLevels(levels: UserLevel[], currentPrice: number | null) {
     this._levels = levels;
     this._currentPrice = currentPrice;
-    this._axisViews = levels.map((lvl) => new HorizontalRaysPriceAxisView(this, lvl));
-    this.requestUpdate();
-  }
-
-  requestUpdate() {
-    if (this._requestUpdate) {
-      this._requestUpdate();
-    }
+    this.updateAllViews();
   }
 
   get chart() { return this._chart; }
@@ -271,7 +220,7 @@ export default function TradingChart({
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const raysPluginRef = useRef<HorizontalRaysPlugin | null>(null);
+  const rayPrimitiveRef = useRef<HorizontalRayPrimitive | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // States
@@ -424,11 +373,11 @@ export default function TradingChart({
     });
     candleSeriesRef.current = candleSeries;
 
-    // Attach native HorizontalRaysPlugin (renders directly in chart's canvas loop)
-    const raysPlugin = new HorizontalRaysPlugin();
-    raysPluginRef.current = raysPlugin;
-    raysPlugin.setLevels(userLevelsRef.current, currentPriceRef.current);
-    candleSeries.attachPrimitive(raysPlugin);
+    // Attach native HorizontalRayPrimitive (renders directly in chart's canvas loop)
+    const rayPrimitive = new HorizontalRayPrimitive(chart, candleSeries);
+    rayPrimitiveRef.current = rayPrimitive;
+    rayPrimitive.setLevels(userLevelsRef.current, currentPriceRef.current);
+    candleSeries.attachPrimitive(rayPrimitive);
 
     // 3. Add Volume Series (Quote Volume in USDT)
     const volumeSeries = chart.addSeries(HistogramSeries, {
@@ -516,6 +465,7 @@ export default function TradingChart({
 
         volumeSeries.setData(volData);
         chart.timeScale().fitContent();
+        rayPrimitiveRef.current?.updateAllViews();
         setChartStatus("Binance Futures: Live");
       } catch (err) {
         if (!isDisposed) {
@@ -642,21 +592,21 @@ export default function TradingChart({
       if (wsRef.current) {
         try { wsRef.current.close(); } catch {}
       }
-      if (raysPluginRef.current && candleSeriesRef.current) {
+      if (rayPrimitiveRef.current && candleSeriesRef.current) {
         try {
-          candleSeriesRef.current.detachPrimitive(raysPluginRef.current);
+          candleSeriesRef.current.detachPrimitive(rayPrimitiveRef.current);
         } catch {}
       }
-      raysPluginRef.current = null;
+      rayPrimitiveRef.current = null;
       chart.remove();
       chartRef.current = null;
     };
   }, [cleanSymbol, timeframe, saveLevels]); // STABLE DEPENDENCIES: Never re-creates chart on tool clicks!
 
-  // Update rays plugin whenever userLevels or currentPrice changes
+  // Update rays primitive whenever userLevels or currentPrice changes
   useEffect(() => {
-    if (raysPluginRef.current) {
-      raysPluginRef.current.setLevels(userLevels, currentPrice);
+    if (rayPrimitiveRef.current) {
+      rayPrimitiveRef.current.setLevels(userLevels, currentPrice);
     }
   }, [userLevels, currentPrice]);
 
