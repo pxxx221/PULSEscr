@@ -81,7 +81,7 @@ export interface BookWall {
   ageSeconds: number;
   relativeSize: number;
   distancePercent: number;
-  status: "observing" | "confirmed";
+  status: "observing" | "confirmed" | "solid";
 }
 
 

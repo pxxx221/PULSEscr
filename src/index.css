@@ -547,13 +547,30 @@ input[type="range"]::-webkit-slider-thumb:hover {
   50% { opacity: 1; transform: scale(1.02); }
 }
 
+.density-status-solid {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #F59E0B;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
 .density-status-confirmed {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: #32B79A;
+  color: #16C7E8;
   font-size: 10px;
   font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(22, 199, 232, 0.1);
+  border: 1px solid rgba(22, 199, 232, 0.25);
 }
 
 .density-status-observing {

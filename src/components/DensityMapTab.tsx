@@ -11,10 +11,12 @@ import {
   ExternalLink, 
   SlidersHorizontal,
   ShieldCheck,
+  Shield,
   Eye,
   Flame,
   CheckCircle2,
-  RefreshCw
+  RefreshCw,
+  Timer
 } from "lucide-react";
 import { convertRuToEnLayout } from "../utils/keyboardTranslit";
 
@@ -38,9 +40,9 @@ export default function DensityMapTab({
 }: DensityMapTabProps) {
   const [search, setSearch] = useState("");
   const [sideFilter, setSideFilter] = useState<"ALL" | "bid" | "ask">("ALL");
-  const [distanceFilter, setDistanceFilter] = useState<number>(2.0); // max distance %
-  const [minNotionalFilter, setMinNotionalFilter] = useState<number>(50); // in thousands ($50K)
-  const [onlyConfirmed, setOnlyConfirmed] = useState(false);
+  const [distanceFilter, setDistanceFilter] = useState<number>(2.5); // max distance %
+  const [minNotionalFilter, setMinNotionalFilter] = useState<number>(25); // in thousands ($25K default for alts)
+  const [minAgeFilter, setMinAgeFilter] = useState<number>(60); // Default to >= 60s (от 1 минуты!)
   const [sortField, setSortField] = useState<SortField>("notional");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
 
@@ -70,6 +72,8 @@ export default function DensityMapTab({
     let bidCount = 0;
     let askCount = 0;
     let nearCount = 0; // distance <= 0.4%
+    let stableCount = 0; // age >= 60s
+    let solidCount = 0; // age >= 180s
 
     for (const w of allWallsList) {
       totalNotional += w.notional;
@@ -83,6 +87,12 @@ export default function DensityMapTab({
       if (w.distancePercent <= 0.4) {
         nearCount++;
       }
+      if (w.ageSeconds >= 60) {
+        stableCount++;
+      }
+      if (w.ageSeconds >= 180) {
+        solidCount++;
+      }
     }
 
     return {
@@ -94,6 +104,8 @@ export default function DensityMapTab({
       bidCount,
       askCount,
       nearCount,
+      stableCount,
+      solidCount,
     };
   }, [allWallsList]);
 
@@ -115,8 +127,8 @@ export default function DensityMapTab({
         // Min notional filter (in thousands)
         if (w.notional < minNotionalFilter * 1000) return false;
 
-        // Confirmed status filter
-        if (onlyConfirmed && w.status !== "confirmed") return false;
+        // Min age filter (filtration against spoofing / jumping orders)
+        if (w.ageSeconds < minAgeFilter) return false;
 
         return true;
       })
@@ -133,7 +145,7 @@ export default function DensityMapTab({
         }
         return sortDirection === "desc" ? -comp : comp;
       });
-  }, [allWallsList, search, sideFilter, distanceFilter, minNotionalFilter, onlyConfirmed, sortField, sortDirection]);
+  }, [allWallsList, search, sideFilter, distanceFilter, minNotionalFilter, minAgeFilter, sortField, sortDirection]);
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -161,7 +173,7 @@ export default function DensityMapTab({
     if (seconds < 60) return `${seconds}с`;
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
-    return `${m}м ${s}с`;
+    return `${m}м ${s < 10 ? '0' : ''}${s}с`;
   };
 
   return (
@@ -174,9 +186,9 @@ export default function DensityMapTab({
               <Layers size={18} className="text-cyan-400" />
             </div>
             <div>
-              <h1 className="density-title">Карта плотностей стакана</h1>
+              <h1 className="density-title">Карта плотностей стакана (Real-Time)</h1>
               <p className="density-subtitle">
-                Мониторинг крупных лимитных заявок институционалов и китов в режиме реального времени
+                Крупные неподвижные заявки институционалов с фильтрацией спуфинга и мигающих ордеров
               </p>
             </div>
           </div>
@@ -184,12 +196,14 @@ export default function DensityMapTab({
 
         {/* Global Summary Cards */}
         <div className="density-stats-grid">
-          <div className="density-stat-card">
-            <span className="stat-label">Всего плотностей</span>
-            <span className="stat-value text-cyan-400">
-              {stats.totalCount} <small className="text-xs text-slate-400">({stats.symbolsCount} пар)</small>
+          <div className="density-stat-card border-cyan-900/40 bg-cyan-950/20">
+            <span className="stat-label text-cyan-300 flex items-center gap-1">
+              <Timer size={12} className="text-cyan-400" /> Настоящие (&ge;1 мин)
             </span>
-            <span className="stat-sub">{formatNotional(stats.totalNotional)} в стаканах</span>
+            <span className="stat-value text-cyan-300">
+              {stats.stableCount} <small className="text-xs text-slate-400">из {stats.totalCount}</small>
+            </span>
+            <span className="stat-sub text-cyan-400/80">Не двигаются &ge;60 сек</span>
           </div>
 
           <div className="density-stat-card border-emerald-900/40 bg-emerald-950/20">
@@ -236,6 +250,43 @@ export default function DensityMapTab({
           )}
         </div>
 
+        {/* PRIMARY FILTER: Lifetime / Anti-Spoofing */}
+        <div className="density-filter-group">
+          <span className="density-filter-label flex items-center gap-1 text-cyan-300 font-bold">
+            <Timer size={13} /> Время удержания:
+          </span>
+          <div className="density-pill-selector">
+            <button
+              className={minAgeFilter === 60 ? "active text-cyan-300 font-bold" : ""}
+              onClick={() => setMinAgeFilter(60)}
+              title="Показать только заявки, которые стоят на месте более 1 минуты (без спуфинга)"
+            >
+              ⏱️ От 1 мин (Рекомендуется)
+            </button>
+            <button
+              className={minAgeFilter === 180 ? "active text-amber-300 font-bold" : ""}
+              onClick={() => setMinAgeFilter(180)}
+              title="Железобетонные плотности: стоят более 3 минут"
+            >
+              🛡️ От 3 мин
+            </button>
+            <button
+              className={minAgeFilter === 300 ? "active text-yellow-300 font-bold" : ""}
+              onClick={() => setMinAgeFilter(300)}
+              title="Монолитные заявки: стоят более 5 минут"
+            >
+              🏛️ От 5 мин
+            </button>
+            <button
+              className={minAgeFilter === 0 ? "active" : ""}
+              onClick={() => setMinAgeFilter(0)}
+              title="Показать все заявки, включая только что выставленные"
+            >
+              Все (от 0с)
+            </button>
+          </div>
+        </div>
+
         {/* Side filter pills */}
         <div className="density-filter-group">
           <span className="density-filter-label">Сторона:</span>
@@ -250,13 +301,13 @@ export default function DensityMapTab({
               className={sideFilter === "bid" ? "active text-emerald-400" : ""}
               onClick={() => setSideFilter("bid")}
             >
-              🟢 BID (Покупка)
+              🟢 BID
             </button>
             <button
               className={sideFilter === "ask" ? "active text-rose-400" : ""}
               onClick={() => setSideFilter("ask")}
             >
-              🔴 ASK (Продажа)
+              🔴 ASK
             </button>
           </div>
         </div>
@@ -271,7 +322,7 @@ export default function DensityMapTab({
           >
             <option value={0.5}>⚡ До 0.5% (Поджатие)</option>
             <option value={1.0}>До 1.0%</option>
-            <option value={2.0}>До 2.0% (Все)</option>
+            <option value={2.5}>До 2.5% (Все)</option>
           </select>
         </div>
 
@@ -283,7 +334,7 @@ export default function DensityMapTab({
             value={minNotionalFilter}
             onChange={(e) => setMinNotionalFilter(Number(e.target.value))}
           >
-            <option value={25}>$25K+ (Для альтов)</option>
+            <option value={25}>$25K+ (Для всех альтов)</option>
             <option value={50}>$50K+</option>
             <option value={100}>$100K+</option>
             <option value={250}>$250K+</option>
@@ -291,16 +342,6 @@ export default function DensityMapTab({
             <option value={1000}>$1M+ (Крупные киты)</option>
           </select>
         </div>
-
-        {/* Only confirmed checkbox */}
-        <label className="density-checkbox-label">
-          <input
-            type="checkbox"
-            checked={onlyConfirmed}
-            onChange={(e) => setOnlyConfirmed(e.target.checked)}
-          />
-          <span>Только устойчивые (▰ 15с+)</span>
-        </label>
       </div>
 
       {/* Main Table Content */}
@@ -308,9 +349,15 @@ export default function DensityMapTab({
         {filteredWalls.length === 0 ? (
           <div className="density-empty-state">
             <Eye size={36} className="text-slate-600 mb-2" />
-            <p className="text-sm font-semibold text-slate-300">Плотности по выбранным фильтрам не найдены</p>
+            <p className="text-sm font-semibold text-slate-300">
+              {minAgeFilter > 0 
+                ? "Заявки с удержанием от 1 минуты пока накапливают время"
+                : "Плотности по выбранным фильтрам не найдены"}
+            </p>
             <p className="text-xs text-slate-500 max-w-md text-center mt-1">
-              Попробуйте снизить минимальный объём (напр. до $25K-$50K) или увеличить дистанцию до 2%. Стакан обновляется каждые 500мс.
+              {minAgeFilter > 0 
+                ? "Стенки отслеживаются в реальном времени. Если крупный ордер стоит неподвижно, он появится здесь ровно через 60 секунд. Вы также можете переключить на «Все (от 0с)»."
+                : "Попробуйте снизить минимальный объём ($25K-$50K) или увеличить дистанцию."}
             </p>
           </div>
         ) : (
@@ -337,10 +384,10 @@ export default function DensityMapTab({
                 </th>
                 <th className="text-center cursor-pointer" onClick={() => toggleSort("age")}>
                   <div className="flex items-center justify-center gap-1">
-                    Удержание {sortField === "age" && <ArrowUpDown size={12} />}
+                    Время на месте {sortField === "age" && <ArrowUpDown size={12} />}
                   </div>
                 </th>
-                <th className="text-center">Статус</th>
+                <th className="text-center">Надежность (Anti-Spoof)</th>
                 <th className="text-center">График</th>
               </tr>
             </thead>
@@ -349,7 +396,8 @@ export default function DensityMapTab({
                 const isBid = wall.side === "bid";
                 const isSelected = wall.symbol === currentCoin;
                 const isNear = wall.distancePercent <= 0.4;
-                const isConfirmed = wall.status === "confirmed";
+                const isSolid = wall.status === "solid" || wall.ageSeconds >= 180;
+                const isConfirmed = wall.status === "confirmed" || wall.ageSeconds >= 60;
 
                 return (
                   <tr
@@ -418,22 +466,37 @@ export default function DensityMapTab({
                     </td>
 
                     {/* Age / Holding duration */}
-                    <td className="text-center font-mono text-xs text-slate-300">
-                      <div className="inline-flex items-center gap-1">
-                        <Clock size={11} className="text-slate-500" />
-                        <span>{formatAge(wall.ageSeconds)}</span>
+                    <td className="text-center font-mono">
+                      <div className="inline-flex items-center gap-1.5">
+                        {isSolid ? (
+                          <span className="text-amber-400 font-bold text-xs flex items-center gap-1">
+                            <Shield size={12} /> {formatAge(wall.ageSeconds)}
+                          </span>
+                        ) : isConfirmed ? (
+                          <span className="text-cyan-400 font-bold text-xs flex items-center gap-1">
+                            <Clock size={12} /> {formatAge(wall.ageSeconds)}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-xs flex items-center gap-1">
+                            <Clock size={11} /> {formatAge(wall.ageSeconds)}
+                          </span>
+                        )}
                       </div>
                     </td>
 
                     {/* Status */}
                     <td className="text-center">
-                      {isConfirmed ? (
-                        <span className="density-status-confirmed" title="Заявка стоит в стакане более 15 секунд">
-                          <CheckCircle2 size={11} /> ▰ Устойчивая
+                      {isSolid ? (
+                        <span className="density-status-solid" title="Заявка стоит неподвижно более 3 минут! Настоящая крупная позиция">
+                          <ShieldCheck size={12} /> 🛡️ ЖЕЛЕЗОБЕТОН (3м+)
+                        </span>
+                      ) : isConfirmed ? (
+                        <span className="density-status-confirmed" title="Заявка стоит на месте более 1 минуты. Не спуфинг">
+                          <CheckCircle2 size={12} /> ⏱️ НАСТОЯЩАЯ (1м+)
                         </span>
                       ) : (
-                        <span className="density-status-observing" title="Заявка недавно появилась в стакане">
-                          ◇ Наблюдается
+                        <span className="density-status-observing" title="Стоит менее 1 минуты, проверяется на движение">
+                          ◇ Проверка ({wall.ageSeconds}с)
                         </span>
                       )}
                     </td>
@@ -461,7 +524,7 @@ export default function DensityMapTab({
 
       {/* Footer Info */}
       <div className="density-footer-tip">
-        <span>💡 <b>Подсказка скальпера:</b> Плотности со статусом «Поджатие» (&le;0.4%) и «▰ Устойчивая» представляют максимальный интерес для входа на разъедание или пробой уровня.</span>
+        <span>🛡️ <b>Защита от спуфинга:</b> Заявки со временем удержания &ge;1 мин не являются алгоритмическим шумом — участник намерен исполнить свой объём по указанной цене.</span>
         <span>Показано: <b>{filteredWalls.length}</b> из <b>{allWallsList.length}</b> найденных плотностей</span>
       </div>
     </div>

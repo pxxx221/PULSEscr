@@ -1,15 +1,6 @@
-import { TickerData } from "../types";
+import { TickerData, BookWall } from "../types";
 
-export interface BookWall {
-  symbol: string;
-  side: "bid" | "ask";
-  price: number;
-  notional: number;
-  ageSeconds: number;
-  relativeSize: number;
-  distancePercent: number;
-  status: "observing" | "confirmed";
-}
+export type { BookWall };
 
 type SeenWall = { firstSeen: number; lastSeen: number; minNotional: number; observations: number; lastNotional: number };
 type BookSide = [string, string][];
@@ -17,7 +8,7 @@ type BookSide = [string, string][];
 // Grace period: walls that temporarily drop out of the top-20 depth snapshot
 // are kept for GRACE_MS before being deleted. This prevents age resets caused
 // by order-book flickering on volatile pairs where 20 levels cover < 0.3%.
-const GRACE_MS = 5_000;
+const GRACE_MS = 6_000;
 
 export class OrderBookWallTracker {
   private seen = new Map<string, SeenWall>();
@@ -47,7 +38,8 @@ export class OrderBookWallTracker {
 
     const all = [...bids, ...asks].map((row) => row.notional).sort((a, b) => a - b);
     const median = all[Math.floor(all.length / 2)] || 0;
-    const minNotional = Math.max(1_000, Math.sqrt(market.volume) * 0.2, median * 8) * volatilityFactor;
+    // Calibrated for both Bitcoin and active Altcoins:
+    const minNotional = Math.max(15_000, Math.sqrt(market.volume) * 0.18, median * 6) * volatilityFactor;
 
     // Track which keys are present in this snapshot
     const present = new Set<string>();
@@ -56,7 +48,7 @@ export class OrderBookWallTracker {
     for (const [side, rows] of [["bid", bids], ["ask", asks]] as const) {
       for (const row of rows) {
         const distancePercent = Math.abs(row.price / mid - 1) * 100;
-        if (distancePercent > 2.0 || row.notional < minNotional) continue;
+        if (distancePercent > 2.5 || row.notional < minNotional) continue;
         const key = `${symbol}:${side}:${row.price}`;
         present.add(key);
         let entry = this.seen.get(key);
@@ -71,17 +63,23 @@ export class OrderBookWallTracker {
         }
         this.seen.set(key, entry);
         const ageSeconds = Math.floor((now - entry.firstSeen) / 1000);
-        if (ageSeconds >= 2 && entry.observations >= 4 && entry.minNotional >= minNotional * 0.6) {
-          result.push({ symbol, side, price: row.price, notional: row.notional,
-            ageSeconds, relativeSize: row.notional / Math.max(median, 1), distancePercent,
-            status: ageSeconds >= 15 && entry.observations >= 12 ? "confirmed" : "observing" });
+        if (ageSeconds >= 2 && entry.observations >= 3 && entry.minNotional >= minNotional * 0.55) {
+          const status = ageSeconds >= 180 ? "solid" : ageSeconds >= 60 ? "confirmed" : "observing";
+          result.push({
+            symbol,
+            side,
+            price: row.price,
+            notional: row.notional,
+            ageSeconds,
+            relativeSize: row.notional / Math.max(median, 1),
+            distancePercent,
+            status,
+          });
         }
       }
     }
 
     // Grace period cleanup: only delete entries that have been absent for > GRACE_MS
-    // This is the critical fix — previously entries were deleted instantly when they
-    // dropped out of the top-20 snapshot, which reset wall age on every flicker.
     for (const [key, entry] of this.seen.entries()) {
       if (key.startsWith(`${symbol}:`) && !present.has(key)) {
         if (now - entry.lastSeen > GRACE_MS) {
@@ -89,21 +87,29 @@ export class OrderBookWallTracker {
         } else {
           // Wall is within grace period — keep it alive and emit it with last known data
           const ageSeconds = Math.floor((now - entry.firstSeen) / 1000);
-          if (ageSeconds >= 2 && entry.observations >= 4 && entry.minNotional >= minNotional * 0.6) {
+          if (ageSeconds >= 2 && entry.observations >= 3 && entry.minNotional >= minNotional * 0.55) {
             const parts = key.split(":");
             const side = parts[parts.length - 2] as "bid" | "ask";
             const price = Number(parts[parts.length - 1]);
             const distancePercent = Math.abs(price / mid - 1) * 100;
-            if (distancePercent <= 2.0) {
-              result.push({ symbol, side, price, notional: entry.lastNotional,
-                ageSeconds, relativeSize: entry.lastNotional / Math.max(median, 1), distancePercent,
-                status: ageSeconds >= 15 && entry.observations >= 12 ? "confirmed" : "observing" });
+            if (distancePercent <= 2.5) {
+              const status = ageSeconds >= 180 ? "solid" : ageSeconds >= 60 ? "confirmed" : "observing";
+              result.push({
+                symbol,
+                side,
+                price,
+                notional: entry.lastNotional,
+                ageSeconds,
+                relativeSize: entry.lastNotional / Math.max(median, 1),
+                distancePercent,
+                status,
+              });
             }
           }
         }
       }
     }
 
-    return result.sort((a, b) => b.notional - a.notional).slice(0, 6);
+    return result.sort((a, b) => b.notional - a.notional).slice(0, 8);
   }
 }

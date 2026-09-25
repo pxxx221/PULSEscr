@@ -1318,27 +1318,51 @@ export default function TradingChart({
       const y = seriesRef.current?.priceToCoordinate(wall.price);
       if (y == null || y < 0 || y > canvas.height) return;
       const isBid = wall.side === "bid";
-      const confirmed = wall.status === "confirmed";
-      const color = confirmed ? (isBid ? "#32B79A" : "#E66A78") : "#8A9BAF";
+      const isSolid = wall.status === "solid" || wall.ageSeconds >= 180;
+      const isConfirmed = wall.status === "confirmed" || wall.ageSeconds >= 60;
+      
+      const color = isSolid 
+        ? (isBid ? "#34D399" : "#F87171") 
+        : isConfirmed 
+        ? (isBid ? "#32B79A" : "#E66A78") 
+        : "#8A9BAF";
+      
       const size = wall.notional >= 1_000_000
-        ? "$" + (wall.notional / 1_000_000).toFixed(1) + "M"
+        ? "$" + (wall.notional / 1_000_000).toFixed(2) + "M"
         : "$" + Math.round(wall.notional / 1_000) + "K";
-      const label = (isBid ? "BID " : "ASK ") + size + " · " + wall.ageSeconds + "s" + (confirmed ? "" : " · наблюд.");
+      
+      const ageStr = wall.ageSeconds >= 60 
+        ? `${Math.floor(wall.ageSeconds / 60)}м ${wall.ageSeconds % 60}с` 
+        : `${wall.ageSeconds}с`;
+
+      const statusTag = isSolid 
+        ? " · 🛡️ ЖЕЛЕЗОБЕТОН (" + ageStr + ")" 
+        : isConfirmed 
+        ? " · ⏱️ НАСТОЯЩАЯ (" + ageStr + ")" 
+        : " · " + ageStr + " (проверка)";
+      
+      const priceStr = wall.price >= 1 ? "$" + wall.price : "$" + wall.price.toFixed(5);
+      const label = (isBid ? "BID " : "ASK ") + size + " @ " + priceStr + statusTag;
+      
       ctx.save();
-      ctx.strokeStyle = confirmed ? (isBid ? "rgba(50,183,154,.72)" : "rgba(230,106,120,.72)") : "rgba(138,155,175,.5)";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = isSolid 
+        ? (isBid ? "rgba(52,211,153,.9)" : "rgba(248,113,113,.9)") 
+        : isConfirmed 
+        ? (isBid ? "rgba(50,183,154,.75)" : "rgba(230,106,120,.75)") 
+        : "rgba(138,155,175,.45)";
+      ctx.lineWidth = isSolid ? 2 : 1;
+      ctx.setLineDash(isSolid ? [8, 4] : [5, 4]);
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(canvas.width, y);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.font = "bold 10px 'JetBrains Mono', monospace";
-      const width = ctx.measureText(label).width + 14;
+      ctx.font = isSolid ? "bold 11px 'JetBrains Mono', monospace" : "bold 10px 'JetBrains Mono', monospace";
+      const width = ctx.measureText(label).width + 16;
       const x = canvas.width - width - 74;
       ctx.fillStyle = "#10161F";
       ctx.strokeStyle = color;
-      drawRoundRect(ctx, x, y - 9, width, 18, 3);
+      drawRoundRect(ctx, x, y - 10, width, 20, 4);
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = color;

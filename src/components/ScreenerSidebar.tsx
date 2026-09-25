@@ -266,7 +266,27 @@ export default function ScreenerSidebar({
       <div key={key} className={'pulse-market-row '+(isActive?'is-selected':'')}>
         <button className={'pulse-favorite '+(isFav?'is-favorite':'')} aria-label={'Favorite '+key} onClick={()=>toggleFav(key)}><Star size={12}/></button>
         <button className="pulse-market-select" onClick={()=>selectCoin(key)} aria-pressed={isActive}>
-          <span className="pulse-market-symbol">{key.split('/')[0]} {hotAltSymbolsSet.has(key) && <Flame size={11} className="pulse-hot-icon"/>}{wallIndicators.map((w, i) => <span key={i} className="pulse-level-indicator" style={{ color: w.status === 'confirmed' ? (w.side === 'bid' ? '#32B79A' : '#E66A78') : '#8A9BAF' }} title={`${w.status === 'confirmed' ? 'Устойчивая плотность' : 'Наблюдается'} · ${w.side === 'bid' ? 'Покупка' : 'Продажа'} · $${w.price} · $${Math.round(w.notional).toLocaleString('en-US')} · держится ${w.ageSeconds}с`}>{w.status === 'confirmed' ? '▰' : '◇'}<small>{w.side === 'bid' ? 'B' : 'A'} {formatWallSize(w.notional)}</small></span>)}{pushedSymbols[key] && <i className={pushedSymbols[key].type==='LONG'?'positive-dot':'negative-dot'}/>}</span>
+          <span className="pulse-market-symbol">
+            {key.split('/')[0]} {hotAltSymbolsSet.has(key) && <Flame size={11} className="pulse-hot-icon"/>}
+            {wallIndicators.map((w, i) => {
+              const isSolid = w.status === 'solid' || w.ageSeconds >= 180;
+              const isConfirmed = w.status === 'confirmed' || w.ageSeconds >= 60;
+              const color = isSolid ? '#F59E0B' : isConfirmed ? (w.side === 'bid' ? '#32B79A' : '#E66A78') : '#8A9BAF';
+              const icon = isSolid ? '🛡️' : isConfirmed ? '▰' : '◇';
+              const statusName = isSolid ? '🛡️ Железобетон (3м+)' : isConfirmed ? '⏱️ Настоящая (1м+)' : 'Проверка (<1м)';
+              return (
+                <span
+                  key={i}
+                  className="pulse-level-indicator"
+                  style={{ color }}
+                  title={`${statusName} · ${w.side === 'bid' ? 'Покупка' : 'Продажа'} · $${w.price} · $${Math.round(w.notional).toLocaleString('en-US')} · стоит ${w.ageSeconds}с без движений`}
+                >
+                  {icon}<small>{w.side === 'bid' ? 'B' : 'A'} {formatWallSize(w.notional)}</small>
+                </span>
+              );
+            })}
+            {pushedSymbols[key] && <i className={pushedSymbols[key].type==='LONG'?'positive-dot':'negative-dot'}/>}
+          </span>
           <span className={info.change>=0?'positive':'negative'}>{info.change>=0?'+':''}{info.change.toFixed(2)}%</span>
           <span className="pulse-row-price">{'$'}{formattedPrice}</span><span className="pulse-row-volume">{'$'}{formattedVol}</span>
         </button>
