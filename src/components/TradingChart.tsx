@@ -461,9 +461,74 @@ export default function TradingChart({
     });
     resizeObserver.observe(containerRef.current);
 
-    // 5. Initial Historical Klines Fetch (500 bars) with retry & backup endpoints
+    // 5. Live data: WebSocket primary + REST polling fallback (for VPN/proxy users)
     let wsReconnectTimeout: any = null;
     let wsInstance: WebSocket | null = null;
+    let wsFailCount = 0;
+    let wsGotMessage = false;
+    let restPollInterval: any = null;
+
+    // Helper: update chart with a single candle tick
+    const applyTick = (candle: MarketCandle) => {
+      if (isDisposed || !isValidCandle(candle)) return;
+      const time = candle.time as UTCTimestamp;
+
+      setCurrentPrice(candle.close);
+      candleSeries.update({
+        time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      });
+
+      const isUp = candle.close >= candle.open;
+      volumeSeries.update({
+        time,
+        value: candle.volume,
+        color: isUp ? "rgba(34, 197, 94, 0.65)" : "rgba(239, 68, 68, 0.65)",
+      });
+
+      // Update cache
+      const cache = candlesRef.current;
+      if (cache.length) {
+        const lastIdx = cache.length - 1;
+        if (cache[lastIdx].time === candle.time) {
+          cache[lastIdx] = candle;
+        } else if (candle.time > cache[lastIdx].time) {
+          cache.push(candle);
+          if (cache.length > 1000) cache.shift();
+        }
+      }
+    };
+
+    // REST polling fallback: fetch last 2 candles every 2s
+    const startRestPolling = () => {
+      if (restPollInterval || isDisposed) return;
+      setChartStatus("Binance Futures: Polling (WS недоступен)");
+      restPollInterval = setInterval(async () => {
+        if (isDisposed) return;
+        try {
+          const raw = await fetchMarketJson(
+            `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${timeframe}&limit=2`,
+            5000,
+            abortCtrl.signal
+          );
+          const candles = parseKlines(raw);
+          if (candles.length) {
+            const last = candles[candles.length - 1];
+            applyTick(last);
+          }
+        } catch {}
+      }, 2000);
+    };
+
+    const stopRestPolling = () => {
+      if (restPollInterval) {
+        clearInterval(restPollInterval);
+        restPollInterval = null;
+      }
+    };
 
     const connectWS = () => {
       if (isDisposed) return;
@@ -475,6 +540,17 @@ export default function TradingChart({
       const ws = new WebSocket(wsUrl);
       wsInstance = ws;
       wsRef.current = ws;
+      wsGotMessage = false;
+
+      // If WS doesn't get any message within 8s, count it as a fail
+      const wsTimeout = setTimeout(() => {
+        if (!wsGotMessage && !isDisposed) {
+          wsFailCount++;
+          if (wsFailCount >= 3) {
+            startRestPolling();
+          }
+        }
+      }, 8000);
 
       ws.onopen = () => {
         if (isDisposed) return;
@@ -483,69 +559,45 @@ export default function TradingChart({
 
       ws.onmessage = (event) => {
         if (isDisposed) return;
+        wsGotMessage = true;
+        wsFailCount = 0; // Reset fail counter on successful message
+        // If we were REST polling, stop it — WS is alive
+        if (restPollInterval) {
+          stopRestPolling();
+          setChartStatus("Binance Futures: Live");
+        }
+
         try {
           const msg = JSON.parse(event.data);
           if (msg.k) {
             const k = msg.k;
-            const time = Math.floor(k.t / 1000) as UTCTimestamp;
+            const time = Math.floor(k.t / 1000);
             const open = parseFloat(k.o);
             let high = parseFloat(k.h);
             let low = parseFloat(k.l);
             const close = parseFloat(k.c);
-            const quoteVol = parseFloat(k.q); // Quote volume in USDT ($)
+            const quoteVol = parseFloat(k.q);
 
-            // Clamp high & low against IEEE 754 floating point inaccuracies
             high = Math.max(high, open, close);
             low = Math.min(low, open, close);
 
-            const candle: MarketCandle = {
-              time,
-              open,
-              high,
-              low,
-              close,
-              volume: quoteVol,
-            };
-
-            if (!isValidCandle(candle)) return;
-
-            setCurrentPrice(close);
-            candleSeries.update({
-              time,
-              open,
-              high,
-              low,
-              close,
-            });
-
-            // Update volume
-            const isUp = close >= open;
-            volumeSeries.update({
-              time,
-              value: quoteVol,
-              color: isUp ? "rgba(34, 197, 94, 0.65)" : "rgba(239, 68, 68, 0.65)",
-            });
-
-            // Update cache
-            const cache = candlesRef.current;
-            if (cache.length) {
-              const lastIdx = cache.length - 1;
-              if (cache[lastIdx].time === time) {
-                cache[lastIdx] = candle;
-              } else if (time > cache[lastIdx].time) {
-                cache.push(candle);
-                if (cache.length > 1000) cache.shift();
-              }
-            }
+            applyTick({ time, open, high, low, close, volume: quoteVol });
           }
         } catch {}
       };
 
       ws.onclose = () => {
+        clearTimeout(wsTimeout);
         if (isDisposed) return;
-        // Auto-reconnect after 2 seconds
-        setChartStatus("Переподключение WS...");
-        wsReconnectTimeout = setTimeout(connectWS, 2000);
+        wsFailCount++;
+        if (wsFailCount >= 3) {
+          // WS keeps failing — switch to REST polling
+          startRestPolling();
+        } else {
+          setChartStatus("Переподключение WS...");
+        }
+        // Always try to reconnect WS in background (even during REST polling)
+        wsReconnectTimeout = setTimeout(connectWS, wsFailCount >= 3 ? 10000 : 2500);
       };
 
       ws.onerror = () => {
@@ -599,7 +651,6 @@ export default function TradingChart({
           },
         });
 
-        // Set candlestick data
         candleSeries.setData(
           candles.map((c) => ({
             time: c.time as UTCTimestamp,
@@ -610,23 +661,14 @@ export default function TradingChart({
           }))
         );
 
-        // Volume with Spike Detection (> 1.8x SMA20)
         const volData = candles.map((c, i) => {
           const slice = candles.slice(Math.max(0, i - 20), i);
           const avgVol = slice.length ? slice.reduce((acc, curr) => acc + curr.volume, 0) / slice.length : c.volume;
           const isSpike = c.volume > avgVol * 1.8;
           const isUp = c.close >= c.open;
-
           let color = isUp ? "rgba(34, 197, 94, 0.65)" : "rgba(239, 68, 68, 0.65)";
-          if (isSpike) {
-            color = isUp ? "#EAB308" : "#F97316"; // Gold (Up) or Orange (Down) Spike
-          }
-
-          return {
-            time: c.time as UTCTimestamp,
-            value: c.volume,
-            color,
-          };
+          if (isSpike) color = isUp ? "#EAB308" : "#F97316";
+          return { time: c.time as UTCTimestamp, value: c.volume, color };
         });
 
         volumeSeries.setData(volData);
@@ -674,14 +716,12 @@ export default function TradingChart({
       let levelType: "HIGH" | "LOW" = "HIGH";
 
       if (magnetModeRef.current && candlesRef.current.length) {
-        // Find candle at this clicked time or closest
         const candle = candlesRef.current.find((c) => c.time === clickedTime) || 
           candlesRef.current.reduce((prev, curr) => Math.abs(curr.time - clickedTime!) < Math.abs(prev.time - clickedTime!) ? curr : prev);
 
         if (candle) {
           const diffHigh = Math.abs(candle.high - clickedPrice);
           const diffLow = Math.abs(candle.low - clickedPrice);
-
           if (diffHigh <= diffLow) {
             finalPrice = candle.high;
             levelType = "HIGH";
@@ -705,13 +745,14 @@ export default function TradingChart({
       userLevelsRef.current = updated;
       saveLevels(updated);
       rayPrimitiveRef.current?.setLevels(updated, currentPriceRef.current);
-      setLevelToolActive(false); // Turn off tool after single placement
+      setLevelToolActive(false);
     });
 
     return () => {
       isDisposed = true;
       abortCtrl.abort();
       if (wsReconnectTimeout) clearTimeout(wsReconnectTimeout);
+      stopRestPolling();
       resizeObserver.disconnect();
       if (wsRef.current) {
         try { wsRef.current.close(); } catch {}
