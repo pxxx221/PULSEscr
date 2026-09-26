@@ -503,9 +503,9 @@ export default function TradingChart({
     };
 
     // REST polling fallback: fetch last 2 candles every 2s
+    // Starts immediately as safety net; WS will disable it if alive
     const startRestPolling = () => {
       if (restPollInterval || isDisposed) return;
-      setChartStatus("Binance Futures: Polling (WS недоступен)");
       restPollInterval = setInterval(async () => {
         if (isDisposed) return;
         try {
@@ -687,6 +687,9 @@ export default function TradingChart({
 
     loadHistory().then((ok) => {
       if (ok && !isDisposed) {
+        // Start REST polling IMMEDIATELY as safety net
+        startRestPolling();
+        // Also try WS — if WS works, it will disable polling automatically
         connectWS();
       }
     });
