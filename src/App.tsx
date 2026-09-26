@@ -460,8 +460,12 @@ export default function App() {
       }
 
       // Single printable character pressed (letters, numbers)
-      if (e.key.length === 1) {
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
         const converted = convertRuToEnLayout(e.key).toUpperCase();
+        // Allow 'H' hotkey to pass through to chart level tool unless already searching
+        if (converted === "H" && activeEl !== searchInputRef.current) {
+          return;
+        }
         // Match English letters and digits (A-Z, 0-9)
         if (/^[A-Z0-9]$/.test(converted)) {
           e.preventDefault();

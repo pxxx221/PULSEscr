@@ -25,26 +25,44 @@ export async function fetchMarketJson(url: string, timeoutMs = 7000, signal?: Ab
 
 export function isValidCandle(c: MarketCandle): boolean {
   return [c.time, c.open, c.high, c.low, c.close, c.volume].every(Number.isFinite)
-    && c.time > 0 && Number.isInteger(c.time) && c.open > 0 && c.close > 0 && c.low > 0
-    && c.volume >= 0 && c.high >= Math.max(c.open, c.close)
-    && c.low <= Math.min(c.open, c.close);
+    && c.time > 0 && c.open > 0 && c.close > 0 && c.low > 0 && c.volume >= 0;
 }
 
 export function parseKlines(raw: unknown): MarketCandle[] {
   if (!Array.isArray(raw) || raw.length === 0) throw new Error('Binance: пустой ответ свечей');
-  const candles = raw.map((row: unknown) => {
+  const valid: MarketCandle[] = [];
+  for (const row of raw) {
+    if (!Array.isArray(row) || row.length < 6) continue;
+    const time = Math.floor(Number(row[0]) / 1000);
+    const open = Number(row[1]);
+    let high = Number(row[2]);
+    let low = Number(row[3]);
+    const close = Number(row[4]);
     const quoteVol = Number(row[7]);
     const baseVol = Number(row[5]);
-    const vol = Number.isFinite(quoteVol) && quoteVol > 0 ? quoteVol : (Number.isFinite(baseVol) ? baseVol : 0);
-    const c = { time: Math.floor(Number(row[0]) / 1000), open: Number(row[1]), high: Number(row[2]),
-      low: Number(row[3]), close: Number(row[4]), volume: vol };
-    if (!isValidCandle(c)) throw new Error('Binance: некорректная свеча');
-    return c;
-  });
-  if (candles.some((c, i) => i > 0 && c.time <= candles[i - 1].time)) {
-    throw new Error('Binance: нарушен порядок свечей');
+    const volume = Number.isFinite(quoteVol) && quoteVol > 0 ? quoteVol : (Number.isFinite(baseVol) && baseVol > 0 ? baseVol : 0);
+
+    // Guard against floating point imprecision
+    high = Math.max(high, open, close);
+    low = Math.min(low, open, close);
+
+    const c: MarketCandle = { time, open, high, low, close, volume };
+    if (isValidCandle(c)) {
+      valid.push(c);
+    }
   }
-  return candles;
+
+  if (valid.length === 0) throw new Error('Binance: нет валидных свечей');
+
+  // Sort ascending and deduplicate by timestamp
+  valid.sort((a, b) => a.time - b.time);
+  const deduped: MarketCandle[] = [];
+  for (let i = 0; i < valid.length; i++) {
+    if (i === 0 || valid[i].time > deduped[deduped.length - 1].time) {
+      deduped.push(valid[i]);
+    }
+  }
+  return deduped;
 }
 
 export function volumeRatio(candles: MarketCandle[]): number {

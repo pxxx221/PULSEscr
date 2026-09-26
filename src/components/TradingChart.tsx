@@ -69,71 +69,76 @@ class HorizontalRayPaneRenderer implements IPrimitivePaneRenderer {
       const width = scope.bitmapSize.width;
 
       for (const pt of this._points) {
-        if (pt.y === null) continue;
+        if (pt.y === null || typeof pt.y !== "number" || isNaN(pt.y)) continue;
+        if (typeof pt.price !== "number" || isNaN(pt.price)) continue;
 
-        const yScaled = Math.round(pt.y * vpr);
-        // Start X: if candle is visible, start at candle X; if scrolled left, start at 0
-        const startX = pt.x !== null ? Math.max(0, Math.round(pt.x * hpr)) : 0;
-        const endX = width; // Draw all the way to the right edge!
+        try {
+          const yScaled = Math.round(pt.y * vpr);
+          // Start X: if candle is visible, start at candle X; if scrolled left, start at 0
+          const startX = pt.x !== null && !isNaN(pt.x) ? Math.max(0, Math.round(pt.x * hpr)) : 0;
+          const endX = width; // Draw all the way to the right edge!
 
-        if (startX >= endX) continue;
+          if (startX >= endX) continue;
 
-        // 1. Draw horizontal dashed ray
-        ctx.strokeStyle = "#C084FC"; // Purple
-        ctx.lineWidth = Math.round(1.8 * vpr);
-        ctx.setLineDash([Math.round(6 * hpr), Math.round(4 * hpr)]);
-        ctx.beginPath();
-        ctx.moveTo(startX, yScaled);
-        ctx.lineTo(endX, yScaled);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // 2. Draw origin dot at the exact candle High/Low
-        if (pt.x !== null && pt.x >= 0 && pt.x <= (scope.mediaSize?.width || width)) {
-          const originX = Math.round(pt.x * hpr);
-          ctx.fillStyle = "#A855F7";
+          // 1. Draw horizontal dashed ray
+          ctx.strokeStyle = "#C084FC"; // Purple
+          ctx.lineWidth = Math.round(1.8 * vpr);
+          ctx.setLineDash([Math.round(6 * hpr), Math.round(4 * hpr)]);
           ctx.beginPath();
-          ctx.arc(originX, yScaled, Math.round(4 * vpr), 0, Math.PI * 2);
-          ctx.fill();
-          ctx.strokeStyle = "#FFFFFF";
-          ctx.lineWidth = Math.round(1.5 * vpr);
+          ctx.moveTo(startX, yScaled);
+          ctx.lineTo(endX, yScaled);
           ctx.stroke();
-        }
+          ctx.setLineDash([]);
 
-        // 3. Draw badge at the right end of the ray
-        const dist = this._currentPrice ? ((pt.price - this._currentPrice) / this._currentPrice) * 100 : 0;
-        const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}%`;
-        const priceStr = pt.price >= 1000 
-          ? pt.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-          : pt.price >= 1 
-          ? pt.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })
-          : pt.price.toFixed(6);
+          // 2. Draw origin dot at the exact candle High/Low
+          if (pt.x !== null && !isNaN(pt.x) && pt.x >= 0 && pt.x <= (scope.mediaSize?.width || width)) {
+            const originX = Math.round(pt.x * hpr);
+            ctx.fillStyle = "#A855F7";
+            ctx.beginPath();
+            ctx.arc(originX, yScaled, Math.round(4 * vpr), 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = "#FFFFFF";
+            ctx.lineWidth = Math.round(1.5 * vpr);
+            ctx.stroke();
+          }
 
-        const label = `${pt.type} $${priceStr} (${distStr})`;
-        const fontSize = Math.round(11 * vpr);
-        ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`;
-        const textWidth = ctx.measureText(label).width;
-        const badgeW = textWidth + Math.round(14 * hpr);
-        const badgeH = Math.round(20 * vpr);
-        const badgeX = endX - badgeW - Math.round(6 * hpr);
-        const badgeY = yScaled - badgeH / 2;
+          // 3. Draw badge at the right end of the ray
+          const dist = (this._currentPrice && this._currentPrice > 0)
+            ? ((pt.price - this._currentPrice) / this._currentPrice) * 100
+            : 0;
+          const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}%`;
+          const priceStr = pt.price >= 1000 
+            ? pt.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : pt.price >= 1 
+            ? pt.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+            : pt.price.toFixed(6);
 
-        ctx.fillStyle = "rgba(16, 22, 31, 0.95)";
-        ctx.strokeStyle = "rgba(168, 85, 247, 0.8)";
-        ctx.lineWidth = Math.round(1 * vpr);
-        ctx.beginPath();
-        if (typeof ctx.roundRect === "function") {
-          ctx.roundRect(badgeX, badgeY, badgeW, badgeH, Math.round(4 * vpr));
-        } else {
-          ctx.rect(badgeX, badgeY, badgeW, badgeH);
-        }
-        ctx.fill();
-        ctx.stroke();
+          const label = `${pt.type} $${priceStr} (${distStr})`;
+          const fontSize = Math.round(11 * vpr);
+          ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`;
+          const textWidth = ctx.measureText(label).width;
+          const badgeW = textWidth + Math.round(14 * hpr);
+          const badgeH = Math.round(20 * vpr);
+          const badgeX = Math.max(0, endX - badgeW - Math.round(6 * hpr));
+          const badgeY = yScaled - badgeH / 2;
 
-        ctx.fillStyle = "#F3E8FF";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(label, badgeX + badgeW / 2, yScaled);
+          ctx.fillStyle = "rgba(16, 22, 31, 0.95)";
+          ctx.strokeStyle = "rgba(168, 85, 247, 0.8)";
+          ctx.lineWidth = Math.round(1 * vpr);
+          ctx.beginPath();
+          if (typeof ctx.roundRect === "function") {
+            ctx.roundRect(badgeX, badgeY, badgeW, badgeH, Math.round(4 * vpr));
+          } else {
+            ctx.rect(badgeX, badgeY, badgeW, badgeH);
+          }
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = "#F3E8FF";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(label, badgeX + badgeW / 2, yScaled);
+        } catch {}
       }
     });
   }
@@ -251,6 +256,30 @@ export default function TradingChart({
   const [showVolume, setShowVolume] = useState<boolean>(true);
   const [chartStatus, setChartStatus] = useState<string>("Загрузка свечей...");
   const [countdown, setCountdown] = useState<string>("");
+  const [reloadTrigger, setReloadTrigger] = useState<number>(0);
+
+  // Global hotkey listener for 'H' / 'h' / 'Р' / 'р' and 'Escape'
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement || 
+        e.target instanceof HTMLTextAreaElement || 
+        (e.target as HTMLElement)?.isContentEditable
+      ) {
+        return;
+      }
+
+      if (e.key === "h" || e.key === "H" || e.key === "р" || e.key === "Р") {
+        e.preventDefault();
+        setLevelToolActive((prev) => !prev);
+      } else if (e.key === "Escape") {
+        setLevelToolActive(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   // Mutable refs to prevent chart re-initialization on state updates
   const candlesRef = useRef<MarketCandle[]>([]);
@@ -432,18 +461,128 @@ export default function TradingChart({
     });
     resizeObserver.observe(containerRef.current);
 
-    // 5. Initial Historical Klines Fetch (500 bars)
+    // 5. Initial Historical Klines Fetch (500 bars) with retry & backup endpoints
+    let wsReconnectTimeout: any = null;
+    let wsInstance: WebSocket | null = null;
+
+    const connectWS = () => {
+      if (isDisposed) return;
+      if (wsInstance) {
+        try { wsInstance.close(); } catch {}
+      }
+
+      const wsUrl = `wss://fstream.binance.com/ws/${cleanSymbol.toLowerCase()}@kline_${timeframe}`;
+      const ws = new WebSocket(wsUrl);
+      wsInstance = ws;
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (isDisposed) return;
+        setChartStatus("Binance Futures: Live");
+      };
+
+      ws.onmessage = (event) => {
+        if (isDisposed) return;
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.k) {
+            const k = msg.k;
+            const time = Math.floor(k.t / 1000) as UTCTimestamp;
+            const open = parseFloat(k.o);
+            let high = parseFloat(k.h);
+            let low = parseFloat(k.l);
+            const close = parseFloat(k.c);
+            const quoteVol = parseFloat(k.q); // Quote volume in USDT ($)
+
+            // Clamp high & low against IEEE 754 floating point inaccuracies
+            high = Math.max(high, open, close);
+            low = Math.min(low, open, close);
+
+            const candle: MarketCandle = {
+              time,
+              open,
+              high,
+              low,
+              close,
+              volume: quoteVol,
+            };
+
+            if (!isValidCandle(candle)) return;
+
+            setCurrentPrice(close);
+            candleSeries.update({
+              time,
+              open,
+              high,
+              low,
+              close,
+            });
+
+            // Update volume
+            const isUp = close >= open;
+            volumeSeries.update({
+              time,
+              value: quoteVol,
+              color: isUp ? "rgba(34, 197, 94, 0.65)" : "rgba(239, 68, 68, 0.65)",
+            });
+
+            // Update cache
+            const cache = candlesRef.current;
+            if (cache.length) {
+              const lastIdx = cache.length - 1;
+              if (cache[lastIdx].time === time) {
+                cache[lastIdx] = candle;
+              } else if (time > cache[lastIdx].time) {
+                cache.push(candle);
+                if (cache.length > 1000) cache.shift();
+              }
+            }
+          }
+        } catch {}
+      };
+
+      ws.onclose = () => {
+        if (isDisposed) return;
+        // Auto-reconnect after 2 seconds
+        setChartStatus("Переподключение WS...");
+        wsReconnectTimeout = setTimeout(connectWS, 2000);
+      };
+
+      ws.onerror = () => {
+        if (isDisposed) return;
+        try { ws.close(); } catch {}
+      };
+    };
+
     const loadHistory = async () => {
       setChartStatus("Загрузка свечей Binance...");
-      try {
-        const raw = await fetchMarketJson(
-          `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${timeframe}&limit=500`,
-          8000,
-          abortCtrl.signal
-        );
+      const endpoints = [
+        `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${timeframe}&limit=500`,
+        `https://fapi.binance.info/fapi/v1/klines?symbol=${cleanSymbol}&interval=${timeframe}&limit=500`,
+      ];
 
-        if (isDisposed) return;
-        const candles = parseKlines(raw);
+      let rawData: unknown = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (isDisposed) return false;
+        const endpoint = endpoints[attempt % endpoints.length];
+        try {
+          rawData = await fetchMarketJson(endpoint, 7000, abortCtrl.signal);
+          if (rawData) break;
+        } catch (err) {
+          if (isDisposed || abortCtrl.signal.aborted) return false;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+
+      if (!rawData) {
+        if (!isDisposed) {
+          setChartStatus("Ошибка соединения с Binance");
+        }
+        return false;
+      }
+
+      try {
+        const candles = parseKlines(rawData);
         if (!candles.length) throw new Error("Пустая история");
 
         candlesRef.current = candles;
@@ -494,75 +633,20 @@ export default function TradingChart({
         chart.timeScale().fitContent();
         rayPrimitiveRef.current?.updateAllViews();
         setChartStatus("Binance Futures: Live");
+        return true;
       } catch (err) {
         if (!isDisposed) {
-          setChartStatus("Ошибка загрузки истории Binance");
+          console.error("Klines parsing error:", err);
+          setChartStatus("Ошибка парсинга свечей");
         }
+        return false;
       }
     };
 
-    loadHistory().then(() => {
-      if (isDisposed) return;
-      // 6. Connect live WebSocket for real-time tick streaming
-      const wsUrl = `wss://fstream.binance.com/ws/${cleanSymbol.toLowerCase()}@kline_${timeframe}`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onmessage = (event) => {
-        if (isDisposed) return;
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.k) {
-            const k = msg.k;
-            const time = Math.floor(k.t / 1000) as UTCTimestamp;
-            const open = parseFloat(k.o);
-            const high = parseFloat(k.h);
-            const low = parseFloat(k.l);
-            const close = parseFloat(k.c);
-            const quoteVol = parseFloat(k.q); // Quote volume in USDT ($)
-
-            const candle: MarketCandle = {
-              time,
-              open,
-              high,
-              low,
-              close,
-              volume: quoteVol,
-            };
-
-            if (!isValidCandle(candle)) return;
-
-            setCurrentPrice(close);
-            candleSeries.update({
-              time,
-              open,
-              high,
-              low,
-              close,
-            });
-
-            // Update volume
-            const isUp = close >= open;
-            volumeSeries.update({
-              time,
-              value: quoteVol,
-              color: isUp ? "rgba(34, 197, 94, 0.65)" : "rgba(239, 68, 68, 0.65)",
-            });
-
-            // Update cache
-            const cache = candlesRef.current;
-            if (cache.length) {
-              const lastIdx = cache.length - 1;
-              if (cache[lastIdx].time === time) {
-                cache[lastIdx] = candle;
-              } else if (time > cache[lastIdx].time) {
-                cache.push(candle);
-                if (cache.length > 1000) cache.shift();
-              }
-            }
-          }
-        } catch {}
-      };
+    loadHistory().then((ok) => {
+      if (ok && !isDisposed) {
+        connectWS();
+      }
     });
 
     // 7. Click listener on chart to place levels (Uses refs, NEVER causes chart remount!)
@@ -627,6 +711,7 @@ export default function TradingChart({
     return () => {
       isDisposed = true;
       abortCtrl.abort();
+      if (wsReconnectTimeout) clearTimeout(wsReconnectTimeout);
       resizeObserver.disconnect();
       if (wsRef.current) {
         try { wsRef.current.close(); } catch {}
@@ -640,7 +725,7 @@ export default function TradingChart({
       chart.remove();
       chartRef.current = null;
     };
-  }, [cleanSymbol, timeframe, saveLevels]); // STABLE DEPENDENCIES: Never re-creates chart on tool clicks!
+  }, [cleanSymbol, timeframe, saveLevels, reloadTrigger]); // STABLE DEPENDENCIES: Never re-creates chart on tool clicks!
 
   // Update rays primitive whenever userLevels or currentPrice changes
   useEffect(() => {
@@ -841,9 +926,39 @@ export default function TradingChart({
       </div>
 
       {/* Main Chart Canvas Container */}
-      <div className="relative flex-1 w-full h-full min-h-0">
+      <div className={`relative flex-1 w-full h-full min-h-0 ${levelToolActive ? "cursor-crosshair" : ""}`}>
         {/* TradingView Chart Container */}
         <div ref={containerRef} className="w-full h-full" />
+
+        {/* Status Indicator Banner (When loading or reconnecting or error) */}
+        {chartStatus !== "Binance Futures: Live" && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-1.5 rounded-md bg-[#10161F]/95 border border-[#1E2936] text-xs font-mono shadow-lg backdrop-blur-sm pointer-events-auto">
+            {chartStatus.includes("Загрузка") || chartStatus.includes("WS") ? (
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+            ) : (
+              <span className="w-2 h-2 rounded-full bg-rose-500" />
+            )}
+            <span className={chartStatus.includes("Ошибка") ? "text-rose-300 font-semibold" : "text-slate-300"}>
+              {chartStatus}
+            </span>
+            {chartStatus.includes("Ошибка") && (
+              <button
+                onClick={() => setReloadTrigger((v) => v + 1)}
+                className="ml-2 px-2 py-0.5 rounded bg-rose-950/80 border border-rose-700/60 text-rose-200 text-[10px] hover:bg-rose-900 transition-colors"
+              >
+                Повторить
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Level Tool Drawing Hint */}
+        {levelToolActive && (
+          <div className="absolute top-3 right-4 z-30 flex items-center gap-2 px-3 py-1 rounded bg-purple-950/90 border border-purple-500/80 text-purple-200 font-mono text-xs shadow-lg backdrop-blur-sm pointer-events-none animate-pulse">
+            <Target size={13} className="text-purple-400" />
+            <span>Кликните по свече для установки луча (Esc — отмена)</span>
+          </div>
+        )}
 
         {/* Floating Active Levels Pills (Quick Delete) */}
         {userLevels.length > 0 && (
@@ -853,8 +968,8 @@ export default function TradingChart({
                 key={lvl.id}
                 className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#10161F]/90 border border-purple-500/40 text-purple-300 font-mono text-[11px] backdrop-blur-sm shadow-md"
               >
-                <span>${formatPrice(lvl.price)}</span>
-                <span className="text-[10px] text-slate-400">({lvl.type})</span>
+                <span className="text-slate-400 text-[10px]">{lvl.type}</span>
+                <span className="font-semibold">${formatPrice(lvl.price)}</span>
                 <button
                   onClick={() => deleteLevel(lvl.id)}
                   className="hover:text-rose-400 text-slate-500 transition-colors ml-0.5"
@@ -867,13 +982,14 @@ export default function TradingChart({
           </div>
         )}
 
-        {/* Volume Legend Tip */}
+        {/* Volume Legend Tip (Safely positioned above time scale with dark backdrop) */}
         {showVolume && (
-          <div className="absolute bottom-8 left-3 z-20 text-[10px] text-slate-500 font-mono flex items-center gap-2 pointer-events-none">
-            <span>Объём в USDT ($)</span>
-            <span className="flex items-center gap-1">
+          <div className="absolute bottom-10 left-3 z-20 text-[10px] text-slate-400 font-mono flex items-center gap-2 px-2 py-0.5 rounded bg-[#0B0F14]/90 border border-[#1E2936]/80 backdrop-blur-sm pointer-events-none select-none">
+            <span className="text-slate-400">Объём: <b>USDT ($)</b></span>
+            <span className="text-slate-600">|</span>
+            <span className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-yellow-400" />
-              <span>Всплеск объёма (&gt;1.8x)</span>
+              <span className="text-yellow-300/90">&gt;1.8x SMA20</span>
             </span>
           </div>
         )}
