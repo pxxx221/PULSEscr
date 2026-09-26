@@ -518,35 +518,34 @@ export default function TradingChart({
       else if (timeframe === "4h") tfSec = 14400;
       else if (timeframe === "1d") tfSec = 86400;
 
-      const tradeSec = Math.floor(tradeTimeMs / 1000);
-      const candleTime = Math.floor(tradeSec / tfSec) * tfSec;
       const last = cache[cache.length - 1];
+      const tradeSec = Math.floor(tradeTimeMs / 1000);
 
-      if (candleTime >= last.time) {
-        if (candleTime === last.time) {
-          last.high = Math.max(last.high, price);
-          last.low = Math.min(last.low, price);
-          last.close = price;
-          if (Number.isFinite(qty) && qty > 0) {
-            last.volume += qty * price;
-          }
-          applyTick(last);
-        } else {
-          // New candle boundary reached by trade
-          const newCandle: MarketCandle = {
-            time: candleTime,
-            open: price,
-            high: price,
-            low: price,
-            close: price,
-            volume: Number.isFinite(qty) && qty > 0 ? qty * price : 0,
-          };
-          applyTick(newCandle);
+      // If trade has crossed into the next candle period
+      if (tradeSec >= last.time + tfSec) {
+        const nextCandleTime = Math.floor(tradeSec / tfSec) * tfSec;
+        const newCandle: MarketCandle = {
+          time: nextCandleTime,
+          open: price,
+          high: price,
+          low: price,
+          close: price,
+          volume: Number.isFinite(qty) && qty > 0 ? qty * price : 0,
+        };
+        applyTick(newCandle);
+      } else {
+        // Update current active candle tick-by-tick
+        last.high = Math.max(last.high, price);
+        last.low = Math.min(last.low, price);
+        last.close = price;
+        if (Number.isFinite(qty) && qty > 0) {
+          last.volume += qty * price;
         }
+        applyTick(last);
       }
     };
 
-    // REST polling fallback: fetch last 2 candles every 2s
+    // REST polling fallback: fetch last 2 candles every 1000ms
     // Starts immediately as safety net; WS will disable it if alive
     const startRestPolling = () => {
       if (restPollInterval || isDisposed) return;
@@ -555,7 +554,7 @@ export default function TradingChart({
         try {
           const raw = await fetchMarketJson(
             `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${timeframe}&limit=2`,
-            5000,
+            4000,
             abortCtrl.signal
           );
           const candles = parseKlines(raw);
@@ -564,7 +563,7 @@ export default function TradingChart({
             applyTick(last);
           }
         } catch {}
-      }, 2000);
+      }, 1000);
     };
 
     const stopRestPolling = () => {
