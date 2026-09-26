@@ -461,9 +461,10 @@ export default function TradingChart({
     });
     resizeObserver.observe(containerRef.current);
 
-    // 5. Live data: WebSocket primary + REST polling fallback (for VPN/proxy users)
+    // 5. Live data: Dual WebSocket (/market/ws/ kline + aggTrade) + REST polling fallback
     let wsReconnectTimeout: any = null;
-    let wsInstance: WebSocket | null = null;
+    let wsKlineInstance: WebSocket | null = null;
+    let wsTradeInstance: WebSocket | null = null;
     let wsFailCount = 0;
     let wsGotMessage = false;
     let restPollInterval: any = null;
@@ -502,6 +503,49 @@ export default function TradingChart({
       }
     };
 
+    // Helper: update chart with an aggTrade tick for zero-latency, buttery smooth Binance tick-by-tick updates
+    const applyTradeTick = (price: number, qty: number, tradeTimeMs: number) => {
+      if (isDisposed || !Number.isFinite(price) || price <= 0) return;
+      setCurrentPrice(price);
+
+      const cache = candlesRef.current;
+      if (!cache.length) return;
+
+      let tfSec = 60;
+      if (timeframe === "5m") tfSec = 300;
+      else if (timeframe === "15m") tfSec = 900;
+      else if (timeframe === "1h") tfSec = 3600;
+      else if (timeframe === "4h") tfSec = 14400;
+      else if (timeframe === "1d") tfSec = 86400;
+
+      const tradeSec = Math.floor(tradeTimeMs / 1000);
+      const candleTime = Math.floor(tradeSec / tfSec) * tfSec;
+      const last = cache[cache.length - 1];
+
+      if (candleTime >= last.time) {
+        if (candleTime === last.time) {
+          last.high = Math.max(last.high, price);
+          last.low = Math.min(last.low, price);
+          last.close = price;
+          if (Number.isFinite(qty) && qty > 0) {
+            last.volume += qty * price;
+          }
+          applyTick(last);
+        } else {
+          // New candle boundary reached by trade
+          const newCandle: MarketCandle = {
+            time: candleTime,
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+            volume: Number.isFinite(qty) && qty > 0 ? qty * price : 0,
+          };
+          applyTick(newCandle);
+        }
+      }
+    };
+
     // REST polling fallback: fetch last 2 candles every 2s
     // Starts immediately as safety net; WS will disable it if alive
     const startRestPolling = () => {
@@ -532,41 +576,45 @@ export default function TradingChart({
 
     const connectWS = () => {
       if (isDisposed) return;
-      if (wsInstance) {
-        try { wsInstance.close(); } catch {}
+      if (wsKlineInstance) {
+        try { wsKlineInstance.close(); } catch {}
+      }
+      if (wsTradeInstance) {
+        try { wsTradeInstance.close(); } catch {}
       }
 
-      const wsUrl = `wss://fstream.binance.com/ws/${cleanSymbol.toLowerCase()}@kline_${timeframe}`;
-      const ws = new WebSocket(wsUrl);
-      wsInstance = ws;
-      wsRef.current = ws;
+      // Binance Futures active WebSocket endpoints use /market/ws/
+      const domain = wsFailCount >= 2 ? "fstream.binance.info" : "fstream.binance.com";
+      const wsKlineUrl = `wss://${domain}/market/ws/${cleanSymbol.toLowerCase()}@kline_${timeframe}`;
+      const wsTradeUrl = `wss://${domain}/market/ws/${cleanSymbol.toLowerCase()}@aggTrade`;
+
+      const wsKline = new WebSocket(wsKlineUrl);
+      const wsTrade = new WebSocket(wsTradeUrl);
+      wsKlineInstance = wsKline;
+      wsTradeInstance = wsTrade;
+      wsRef.current = wsKline;
       wsGotMessage = false;
 
-      // If WS doesn't get any message within 8s, count it as a fail
-      const wsTimeout = setTimeout(() => {
-        if (!wsGotMessage && !isDisposed) {
-          wsFailCount++;
-          if (wsFailCount >= 3) {
-            startRestPolling();
+      const onWsMessageReceived = () => {
+        if (!wsGotMessage) {
+          wsGotMessage = true;
+          wsFailCount = 0;
+          if (restPollInterval) {
+            stopRestPolling();
           }
+          setChartStatus("Binance Futures: Live");
         }
-      }, 8000);
+      };
 
-      ws.onopen = () => {
+      // 1. Authoritative Kline Stream
+      wsKline.onopen = () => {
         if (isDisposed) return;
         setChartStatus("Binance Futures: Live");
       };
 
-      ws.onmessage = (event) => {
+      wsKline.onmessage = (event) => {
         if (isDisposed) return;
-        wsGotMessage = true;
-        wsFailCount = 0; // Reset fail counter on successful message
-        // If we were REST polling, stop it — WS is alive
-        if (restPollInterval) {
-          stopRestPolling();
-          setChartStatus("Binance Futures: Live");
-        }
-
+        onWsMessageReceived();
         try {
           const msg = JSON.parse(event.data);
           if (msg.k) {
@@ -586,23 +634,37 @@ export default function TradingChart({
         } catch {}
       };
 
-      ws.onclose = () => {
-        clearTimeout(wsTimeout);
+      wsKline.onclose = () => {
         if (isDisposed) return;
         wsFailCount++;
         if (wsFailCount >= 3) {
-          // WS keeps failing — switch to REST polling
           startRestPolling();
         } else {
           setChartStatus("Переподключение WS...");
         }
-        // Always try to reconnect WS in background (even during REST polling)
         wsReconnectTimeout = setTimeout(connectWS, wsFailCount >= 3 ? 10000 : 2500);
       };
 
-      ws.onerror = () => {
+      wsKline.onerror = () => {
         if (isDisposed) return;
-        try { ws.close(); } catch {}
+        try { wsKline.close(); } catch {}
+      };
+
+      // 2. Millisecond Tick-by-Tick aggTrade Stream (instant Binance smoothness)
+      wsTrade.onmessage = (event) => {
+        if (isDisposed) return;
+        onWsMessageReceived();
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.e === "aggTrade" && msg.p) {
+            applyTradeTick(parseFloat(msg.p), parseFloat(msg.q), msg.T || Date.now());
+          }
+        } catch {}
+      };
+
+      wsTrade.onerror = () => {
+        if (isDisposed) return;
+        try { wsTrade.close(); } catch {}
       };
     };
 
@@ -757,8 +819,11 @@ export default function TradingChart({
       if (wsReconnectTimeout) clearTimeout(wsReconnectTimeout);
       stopRestPolling();
       resizeObserver.disconnect();
-      if (wsRef.current) {
-        try { wsRef.current.close(); } catch {}
+      if (wsKlineInstance) {
+        try { wsKlineInstance.close(); } catch {}
+      }
+      if (wsTradeInstance) {
+        try { wsTradeInstance.close(); } catch {}
       }
       if (rayPrimitiveRef.current && candleSeriesRef.current) {
         try {
