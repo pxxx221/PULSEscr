@@ -21,10 +21,12 @@ import {
   EyeOff, 
   X,
   Sparkles,
-  Layers,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  ChevronDown,
+  ChevronUp
 } from "lucide-react";
+import TradeDetailInline from "./TradeDetailInline";
 import { Trade, JournalStats, JournalApiConfig, WeekSummary } from "../../types/journal";
 import { 
   loadSavedTrades, 
@@ -61,6 +63,7 @@ export default function TradingJournalTab({ onOpenChart }: TradingJournalTabProp
   const [sideFilter, setSideFilter] = useState<"ALL" | "LONG" | "SHORT">("ALL");
   const [pnlFilter, setPnlFilter] = useState<"ALL" | "WIN" | "LOSS">("ALL");
   const [tradePage, setTradePage] = useState(1);
+  const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null);
   const rowsPerPage = 20;
 
   // Calculate live stats from current trades
@@ -639,112 +642,138 @@ export default function TradingJournalTab({ onOpenChart }: TradingJournalTabProp
                 {paginatedTrades.map((t) => {
                   const isWin = t.realizedPnl > 0;
                   const isLoss = t.realizedPnl < 0;
+                  const isExpanded = expandedTradeId === t.id;
 
                   return (
-                    <tr
-                      key={t.id}
-                      className="hover:bg-[#161F2C] transition-colors group cursor-pointer"
-                      onClick={() => onOpenChart(t.symbol)}
-                      title={`Открыть график ${t.symbol}`}
-                    >
-                      {/* Type icon: Link to chart + F badge */}
-                      <td className="py-2.5 px-3 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <button
-                            className="text-slate-500 hover:text-cyan-400 transition-colors p-0.5"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onOpenChart(t.symbol);
-                            }}
-                            title="Открыть график"
-                          >
-                            <ExternalLink size={12} />
-                          </button>
-                          <span className="w-4 h-4 rounded bg-amber-500/20 text-amber-400 font-bold text-[10px] flex items-center justify-center border border-amber-500/40">
-                            F
+                    <React.Fragment key={t.id}>
+                      <tr
+                        className={`transition-colors group cursor-pointer ${
+                          isExpanded 
+                            ? "bg-[#0B1514] border-t-2 border-emerald-500/60" 
+                            : "hover:bg-[#161F2C]"
+                        }`}
+                        onClick={() => setExpandedTradeId(isExpanded ? null : t.id)}
+                        title={isExpanded ? "Свернуть график" : `Открыть график сделки ${t.symbol}`}
+                      >
+                        {/* Type icon: Chevron expander + Link to terminal + F badge */}
+                        <td className="py-2.5 px-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <span className="text-slate-400 group-hover:text-white transition-transform">
+                              {isExpanded ? (
+                                <ChevronUp size={13} className="text-emerald-400 font-bold" />
+                              ) : (
+                                <ChevronDown size={13} />
+                              )}
+                            </span>
+                            <button
+                              className="text-slate-500 hover:text-cyan-400 transition-colors p-0.5"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenChart(t.symbol);
+                              }}
+                              title="Открыть в основном терминале"
+                            >
+                              <ExternalLink size={11} />
+                            </button>
+                            <span className="w-4 h-4 rounded bg-amber-500/20 text-amber-400 font-bold text-[10px] flex items-center justify-center border border-amber-500/40">
+                              F
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* Ticker & Side arrow */}
+                        <td className="py-2.5 px-3 font-bold text-slate-100">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono">{t.symbol}</span>
+                            {t.side === "LONG" ? (
+                              <span className="text-emerald-400 text-xs">↗</span>
+                            ) : (
+                              <span className="text-rose-400 text-xs">↘</span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Category */}
+                        <td className="py-2.5 px-3 text-slate-400 text-[11px]">
+                          <span className="px-1.5 py-0.5 rounded bg-[#16202C] border border-[#233144] hover:border-slate-500 transition-colors">
+                            {t.category || "Скальпинг"}
                           </span>
-                        </div>
-                      </td>
+                        </td>
 
-                      {/* Ticker & Side arrow */}
-                      <td className="py-2.5 px-3 font-bold text-slate-100">
-                        <div className="flex items-center gap-1.5">
-                          <span>{t.symbol}</span>
-                          {t.side === "LONG" ? (
-                            <span className="text-emerald-400 text-xs">↗</span>
-                          ) : (
-                            <span className="text-rose-400 text-xs">↘</span>
-                          )}
-                        </div>
-                      </td>
+                        {/* Entry Reason */}
+                        <td className="py-2.5 px-3 text-slate-400 text-[11px]">
+                          <span className="text-slate-300">
+                            {t.entryReason || "—"}
+                          </span>
+                        </td>
 
-                      {/* Category */}
-                      <td className="py-2.5 px-3 text-slate-400 text-[11px]">
-                        <span className="px-1.5 py-0.5 rounded bg-[#16202C] border border-[#233144]">
-                          {t.category || "Скальпинг"}
-                        </span>
-                      </td>
+                        {/* Exit Reason */}
+                        <td className="py-2.5 px-3 text-slate-400 text-[11px]">
+                          <span className="text-slate-300">
+                            {t.exitReason || "—"}
+                          </span>
+                        </td>
 
-                      {/* Entry Reason */}
-                      <td className="py-2.5 px-3 text-slate-400 text-[11px]">
-                        <span className="text-slate-300">
-                          {t.entryReason || "—"}
-                        </span>
-                      </td>
+                        {/* Open Price */}
+                        <td className="py-2.5 px-3 text-right font-semibold text-slate-200">
+                          ${t.openPrice < 1 ? t.openPrice.toFixed(6) : t.openPrice.toFixed(4)}
+                        </td>
 
-                      {/* Exit Reason */}
-                      <td className="py-2.5 px-3 text-slate-400 text-[11px]">
-                        <span className="text-slate-300">
-                          {t.exitReason || "—"}
-                        </span>
-                      </td>
+                        {/* Close Price */}
+                        <td className="py-2.5 px-3 text-right font-semibold text-slate-200">
+                          ${t.closePrice < 1 ? t.closePrice.toFixed(6) : t.closePrice.toFixed(4)}
+                        </td>
 
-                      {/* Open Price */}
-                      <td className="py-2.5 px-3 text-right font-semibold text-slate-200">
-                        ${t.openPrice < 1 ? t.openPrice.toFixed(6) : t.openPrice.toFixed(4)}
-                      </td>
+                        {/* Open Time */}
+                        <td className="py-2.5 px-3 text-slate-400 text-[11px] whitespace-nowrap">
+                          {formatTradeTime(t.openTime, timezone)}
+                        </td>
 
-                      {/* Close Price */}
-                      <td className="py-2.5 px-3 text-right font-semibold text-slate-200">
-                        ${t.closePrice < 1 ? t.closePrice.toFixed(6) : t.closePrice.toFixed(4)}
-                      </td>
+                        {/* Close Time */}
+                        <td className="py-2.5 px-3 text-slate-400 text-[11px] whitespace-nowrap">
+                          {formatTradeTime(t.closeTime, timezone)}
+                        </td>
 
-                      {/* Open Time */}
-                      <td className="py-2.5 px-3 text-slate-400 text-[11px] whitespace-nowrap">
-                        {formatTradeTime(t.openTime, timezone)}
-                      </td>
+                        {/* Realized PnL */}
+                        <td className="py-2.5 px-3 text-right font-bold">
+                          <span className={`px-2 py-0.5 rounded ${
+                            isWin 
+                              ? "text-emerald-400 bg-emerald-950/40 border border-emerald-900/60" 
+                              : isLoss 
+                              ? "text-rose-400 bg-rose-950/40 border border-rose-900/60" 
+                              : "text-slate-400"
+                          }`}>
+                            {t.realizedPnl >= 0 ? "+" : ""}{t.realizedPnl.toFixed(2)} $
+                            <small className="ml-1 text-[10px] opacity-80">
+                              ({t.pnlPercent >= 0 ? "+" : ""}{t.pnlPercent.toFixed(2)}%)
+                            </small>
+                          </span>
+                        </td>
 
-                      {/* Close Time */}
-                      <td className="py-2.5 px-3 text-slate-400 text-[11px] whitespace-nowrap">
-                        {formatTradeTime(t.closeTime, timezone)}
-                      </td>
+                        {/* Commission */}
+                        <td className="py-2.5 px-3 text-right text-slate-400">
+                          ${t.commission.toFixed(3)}
+                        </td>
 
-                      {/* Realized PnL */}
-                      <td className="py-2.5 px-3 text-right font-bold">
-                        <span className={`px-2 py-0.5 rounded ${
-                          isWin 
-                            ? "text-emerald-400 bg-emerald-950/40 border border-emerald-900/60" 
-                            : isLoss 
-                            ? "text-rose-400 bg-rose-950/40 border border-rose-900/60" 
-                            : "text-slate-400"
-                        }`}>
-                          {t.realizedPnl >= 0 ? "+" : ""}{t.realizedPnl.toFixed(2)} $
-                          <small className="ml-1 text-[10px] opacity-80">
-                            ({t.pnlPercent >= 0 ? "+" : ""}{t.pnlPercent.toFixed(2)}%)
-                          </small>
-                        </span>
-                      </td>
+                        {/* Notional / Volume */}
+                        <td className="py-2.5 px-3 text-right text-slate-300 font-semibold">
+                          ${t.notional.toFixed(2)}
+                        </td>
+                      </tr>
 
-                      {/* Commission */}
-                      <td className="py-2.5 px-3 text-right text-slate-400">
-                        ${t.commission.toFixed(3)}
-                      </td>
-
-                      {/* Notional / Volume */}
-                      <td className="py-2.5 px-3 text-right text-slate-300 font-semibold">
-                        ${t.notional.toFixed(2)}
-                      </td>
-                    </tr>
+                      {/* Expanded Inline Trade Detail Chart Window */}
+                      {isExpanded && (
+                        <tr className="bg-[#0B1514]">
+                          <td colSpan={12} className="p-0 border-b-2 border-emerald-500/50">
+                            <TradeDetailInline
+                              trade={t}
+                              timezone={timezone}
+                              onClose={() => setExpandedTradeId(null)}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>

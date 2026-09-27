@@ -15,6 +15,7 @@ export interface Trade {
   pnlPercent: number; // %
   commission: number; // USD fee
   isFutures: boolean;
+  notes?: string;
 }
 
 export interface JournalStats {
