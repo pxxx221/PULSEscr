@@ -271,15 +271,16 @@ export default function ScreenerSidebar({
             {wallIndicators.map((w, i) => {
               const isSolid = w.status === 'solid' || w.ageSeconds >= 180;
               const isConfirmed = w.status === 'confirmed' || w.ageSeconds >= 60;
-              const color = isSolid ? '#F59E0B' : isConfirmed ? (w.side === 'bid' ? '#32B79A' : '#E66A78') : '#8A9BAF';
-              const icon = isSolid ? '🛡️' : isConfirmed ? '▰' : '◇';
-              const statusName = isSolid ? '🛡️ Железобетон (3м+)' : isConfirmed ? '⏱️ Настоящая (1м+)' : 'Проверка (<1м)';
+              const isMega = w.isMegaWall || w.relativeSize >= 15 || w.notional >= 150_000;
+              const color = isMega ? '#F59E0B' : isSolid ? '#F59E0B' : isConfirmed ? (w.side === 'bid' ? '#32B79A' : '#E66A78') : '#8A9BAF';
+              const icon = isMega ? '🔥' : isSolid ? '🛡️' : isConfirmed ? '▰' : '◇';
+              const statusName = isMega ? '🔥 МЕГА-ПЛОТНОСТЬ (>15x)' : isSolid ? '🛡️ Железобетон (3м+)' : isConfirmed ? '⏱️ Настоящая (1м+)' : 'Проверка (<1м)';
               return (
                 <span
                   key={i}
-                  className="pulse-level-indicator"
+                  className={`pulse-level-indicator ${isMega ? 'animate-pulse font-bold' : ''}`}
                   style={{ color }}
-                  title={`${statusName} · ${w.side === 'bid' ? 'Покупка' : 'Продажа'} · $${w.price} · $${Math.round(w.notional).toLocaleString('en-US')} · стоит ${w.ageSeconds}с без движений`}
+                  title={`${statusName} · ${w.side === 'bid' ? 'Покупка' : 'Продажа'} · $${w.price} · $${Math.round(w.notional).toLocaleString('en-US')} · ${w.relativeSize ? w.relativeSize.toFixed(0) + 'x стакана · ' : ''}стоит ${w.ageSeconds}с`}
                 >
                   {icon}<small>{w.side === 'bid' ? 'B' : 'A'} {formatWallSize(w.notional)}</small>
                 </span>

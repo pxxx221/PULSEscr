@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { Timeframe, TickerData, BookWall } from "../types";
 import { fetchMarketJson, parseKlines, isValidCandle, MarketCandle } from "../services/marketData";
+import { detectCandleTouches, formatWallQuantity } from "../services/orderBookWalls";
 
 interface TradingChartProps {
   symbol: string; // e.g. "BTC/USDT"
@@ -1295,16 +1296,26 @@ export default function TradingChart({
 
     if (!showWalls || !bookWalls.length) return;
 
-    bookWalls.slice(0, 6).forEach((wall) => {
+    bookWalls.slice(0, 8).forEach((wall) => {
       const isBid = wall.side === "bid";
       const isSolid = wall.status === "solid" || wall.ageSeconds >= 180;
       const isConfirmed = wall.status === "confirmed" || wall.ageSeconds >= 60;
+      
+      // Real-time candle touches calculation (Flat ceiling / floor detection)
+      const touches = detectCandleTouches(candlesRef.current, wall.price, wall.side);
+      const isPinned = touches >= 3;
+      const isMega = wall.isMegaWall || wall.relativeSize >= 15 || wall.notional >= 150_000;
 
       let color = isBid ? "#22C55E" : "#EF4444";
       let lineWidth = 1;
       let lineStyle = LineStyle.Dashed;
 
-      if (isSolid) {
+      if (isMega || isPinned) {
+        // High-prominence scalp density styling (matching Tiger.Trade DOM)
+        color = isBid ? "#10B981" : "#F59E0B"; // Amber Gold for Ask walls, Emerald for Bid
+        lineWidth = isPinned ? 3 : 2;
+        lineStyle = isPinned ? LineStyle.Solid : LineStyle.Dashed;
+      } else if (isSolid) {
         color = "#F59E0B";
         lineWidth = 2;
         lineStyle = LineStyle.Solid;
@@ -1319,11 +1330,16 @@ export default function TradingChart({
         ? `${Math.floor(wall.ageSeconds / 60)}м` 
         : `${wall.ageSeconds}с`;
 
-      const badge = isSolid 
-        ? `🛡️ 3м+` 
-        : isConfirmed 
-        ? `⏱️ ${ageStr}` 
-        : `◇ ${ageStr}`;
+      const qtyStr = formatWallQuantity(wall.quantity);
+      const qtyDisplay = qtyStr ? `${qtyStr} ` : "";
+      const touchBadge = touches >= 2 ? `🎯 ${touches}K` : "";
+      const pinBadge = isPinned ? "⚡ ПОДЖАТИЕ" : "";
+      const multBadge = wall.relativeSize ? `${wall.relativeSize.toFixed(0)}x` : "";
+      const baseBadge = isSolid ? `🛡️ 3м+` : isConfirmed ? `⏱️ ${ageStr}` : `◇ ${ageStr}`;
+
+      const title = (isMega || isPinned)
+        ? `🔥 ${isBid ? "BID" : "ASK"}: ${qtyDisplay}(${formatNotional(wall.notional)}) [${[touchBadge, multBadge, baseBadge, pinBadge].filter(Boolean).join(" • ")}]`
+        : `${isBid ? "BID" : "ASK"} ${formatNotional(wall.notional)} (${baseBadge})`;
 
       try {
         const line = series.createPriceLine({
@@ -1332,7 +1348,7 @@ export default function TradingChart({
           lineWidth: lineWidth as any,
           lineStyle,
           axisLabelVisible: true,
-          title: `${isBid ? "BID" : "ASK"} ${formatNotional(wall.notional)} (${badge})`,
+          title,
         });
         wallLinesRef.current.push(line);
       } catch {}
@@ -1461,18 +1477,25 @@ export default function TradingChart({
           </button>
 
           {/* Book Walls Toggle */}
-          <button
-            className={`flex items-center gap-1 px-2.5 py-1 rounded border text-[11px] font-semibold transition-colors ${
-              showWalls 
-                ? "bg-[#141C26] border-emerald-900/60 text-emerald-400" 
-                : "bg-[#141C26] border-[#1E2936] text-slate-500"
-            }`}
-            onClick={() => setShowWalls(!showWalls)}
-            title="Отображение плотностей стакана на графике"
-          >
-            <Layers size={13} />
-            <span>Плотности ({bookWalls.length})</span>
-          </button>
+          {(() => {
+            const hasMega = bookWalls.some((w) => w.isMegaWall || w.relativeSize >= 15 || w.notional >= 150_000);
+            return (
+              <button
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-semibold transition-all ${
+                  showWalls && hasMega
+                    ? "bg-amber-950/80 border-amber-500 text-amber-300 ring-2 ring-amber-500/30"
+                    : showWalls 
+                    ? "bg-[#141C26] border-emerald-900/60 text-emerald-400" 
+                    : "bg-[#141C26] border-[#1E2936] text-slate-500"
+                }`}
+                onClick={() => setShowWalls(!showWalls)}
+                title={hasMega ? "В стакане обнаружена КРУПНАЯ скальперская плотность!" : "Отображение плотностей стакана на графике"}
+              >
+                <Layers size={13} className={hasMega ? "text-amber-400" : ""} />
+                <span>{hasMega ? "🔥 Плотности" : "Плотности"} ({bookWalls.length})</span>
+              </button>
+            );
+          })()}
 
           {/* Volumes Toggle */}
           <button

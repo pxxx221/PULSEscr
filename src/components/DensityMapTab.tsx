@@ -19,6 +19,7 @@ import {
   Timer
 } from "lucide-react";
 import { convertRuToEnLayout } from "../utils/keyboardTranslit";
+import { formatWallQuantity } from "../services/orderBookWalls";
 
 interface DensityMapTabProps {
   bookWalls: Record<string, BookWall[]>;
@@ -28,7 +29,7 @@ interface DensityMapTabProps {
   onOpenChart: (symbol: string) => void;
 }
 
-type SortField = "notional" | "distance" | "age" | "price";
+type SortField = "notional" | "distance" | "age" | "price" | "relativeSize";
 type SortDirection = "asc" | "desc";
 
 export default function DensityMapTab({
@@ -39,6 +40,7 @@ export default function DensityMapTab({
   onOpenChart,
 }: DensityMapTabProps) {
   const [search, setSearch] = useState("");
+  const [presetFilter, setPresetFilter] = useState<"all" | "mega" | "near" | "solid">("all");
   const [sideFilter, setSideFilter] = useState<"ALL" | "bid" | "ask">("ALL");
   const [distanceFilter, setDistanceFilter] = useState<number>(2.5); // max distance %
   const [minNotionalFilter, setMinNotionalFilter] = useState<number>(25); // in thousands ($25K default for alts)
@@ -115,6 +117,17 @@ export default function DensityMapTab({
 
     return allWallsList
       .filter((w) => {
+        // Preset quick filter
+        if (presetFilter === "mega" && !(w.isMegaWall || w.relativeSize >= 15 || w.notional >= 150_000)) {
+          return false;
+        }
+        if (presetFilter === "near" && w.distancePercent > 0.5) {
+          return false;
+        }
+        if (presetFilter === "solid" && w.ageSeconds < 180) {
+          return false;
+        }
+
         // Search filter
         if (query && !w.symbol.toUpperCase().includes(query)) return false;
 
@@ -142,10 +155,12 @@ export default function DensityMapTab({
           comp = a.ageSeconds - b.ageSeconds;
         } else if (sortField === "price") {
           comp = a.price - b.price;
+        } else if (sortField === "relativeSize") {
+          comp = (a.relativeSize || 0) - (b.relativeSize || 0);
         }
         return sortDirection === "desc" ? -comp : comp;
       });
-  }, [allWallsList, search, sideFilter, distanceFilter, minNotionalFilter, minAgeFilter, sortField, sortDirection]);
+  }, [allWallsList, search, presetFilter, sideFilter, distanceFilter, minNotionalFilter, minAgeFilter, sortField, sortDirection]);
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -248,6 +263,42 @@ export default function DensityMapTab({
               ✕
             </button>
           )}
+        </div>
+
+        {/* QUICK PRESETS: Истинные скальперские плотности */}
+        <div className="density-filter-group">
+          <span className="density-filter-label text-amber-400 font-bold flex items-center gap-1">
+            <Flame size={13} /> Пресеты:
+          </span>
+          <div className="density-pill-selector">
+            <button
+              className={presetFilter === "all" ? "active" : ""}
+              onClick={() => setPresetFilter("all")}
+            >
+              Все заявки
+            </button>
+            <button
+              className={presetFilter === "mega" ? "active text-amber-300 font-bold border-amber-500/60" : "text-amber-400/90"}
+              onClick={() => setPresetFilter("mega")}
+              title="Мега-плотности в стакане (>15x к среднему уровню или >$150K)"
+            >
+              🔥 Мега-стенки (&gt;15x)
+            </button>
+            <button
+              className={presetFilter === "near" ? "active text-cyan-300 font-bold" : ""}
+              onClick={() => setPresetFilter("near")}
+              title="Плотности вплотную к цене (до 0.5% — точка входа в пробой/отскок)"
+            >
+              ⚡ Поджатие (&le;0.5%)
+            </button>
+            <button
+              className={presetFilter === "solid" ? "active text-emerald-400 font-bold" : ""}
+              onClick={() => setPresetFilter("solid")}
+              title="Плотности, стоящие более 3 минут"
+            >
+              🛡️ От 3 мин
+            </button>
+          </div>
         </div>
 
         {/* PRIMARY FILTER: Lifetime / Anti-Spoofing */}
@@ -379,7 +430,12 @@ export default function DensityMapTab({
                 </th>
                 <th className="text-right cursor-pointer" onClick={() => toggleSort("notional")}>
                   <div className="flex items-center justify-end gap-1">
-                    Объём заявки ($) {sortField === "notional" && <ArrowUpDown size={12} />}
+                    Объём заявки {sortField === "notional" && <ArrowUpDown size={12} />}
+                  </div>
+                </th>
+                <th className="text-center cursor-pointer" onClick={() => toggleSort("relativeSize")}>
+                  <div className="flex items-center justify-center gap-1">
+                    х-Кратность {sortField === "relativeSize" && <ArrowUpDown size={12} />}
                   </div>
                 </th>
                 <th className="text-center cursor-pointer" onClick={() => toggleSort("age")}>
@@ -398,11 +454,12 @@ export default function DensityMapTab({
                 const isNear = wall.distancePercent <= 0.4;
                 const isSolid = wall.status === "solid" || wall.ageSeconds >= 180;
                 const isConfirmed = wall.status === "confirmed" || wall.ageSeconds >= 60;
+                const isMega = wall.isMegaWall || wall.relativeSize >= 15 || wall.notional >= 150_000;
 
                 return (
                   <tr
                     key={`${wall.symbol}-${wall.side}-${wall.price}-${index}`}
-                    className={`density-row ${isSelected ? "is-selected-coin" : ""} ${isNear ? "is-near-breakout" : ""}`}
+                    className={`density-row ${isSelected ? "is-selected-coin" : ""} ${isNear ? "is-near-breakout" : ""} ${isMega ? "border-l-2 border-l-amber-500" : ""}`}
                     onClick={() => {
                       onSelectCoin(wall.symbol);
                       onOpenChart(wall.symbol);
@@ -419,6 +476,11 @@ export default function DensityMapTab({
                         {wall.change24h !== 0 && (
                           <span className={`text-[11px] font-mono ${wall.change24h >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                             {wall.change24h >= 0 ? "+" : ""}{wall.change24h.toFixed(1)}%
+                          </span>
+                        )}
+                        {isMega && (
+                          <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold text-[10px] border border-amber-500/40">
+                            МЕГА
                           </span>
                         )}
                       </div>
@@ -455,18 +517,31 @@ export default function DensityMapTab({
                       </div>
                     </td>
 
-                    {/* Notional (Volume in USD) */}
+                    {/* Notional (Volume in USD & Coins) */}
                     <td className="text-right font-mono font-bold">
                       <div className="flex flex-col items-end">
-                        <span className={`text-sm ${wall.notional >= 500_000 ? "text-yellow-300" : "text-slate-100"}`}>
+                        <span className={`text-sm ${wall.notional >= 500_000 ? "text-yellow-300 font-extrabold" : "text-slate-100"}`}>
                           {formatNotional(wall.notional)}
                         </span>
-                        {wall.relativeSize > 1 && (
-                          <span className="text-[10px] text-slate-500">
-                            в {wall.relativeSize.toFixed(0)}x выше средней
+                        {wall.quantity && wall.quantity > 0 && (
+                          <span className="text-[11px] text-cyan-400 font-bold">
+                            {formatWallQuantity(wall.quantity)} {wall.symbol.split("/")[0]}
                           </span>
                         )}
                       </div>
+                    </td>
+
+                    {/* Relative Multiple */}
+                    <td className="text-center font-mono">
+                      {isMega ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-950/80 border border-amber-500/60 text-amber-300 font-bold text-xs shadow-sm">
+                          🔥 {wall.relativeSize ? `${wall.relativeSize.toFixed(0)}x` : "15x+"}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-slate-400">
+                          {wall.relativeSize ? `${wall.relativeSize.toFixed(0)}x` : "—"}
+                        </span>
+                      )}
                     </td>
 
                     {/* Age / Holding duration */}

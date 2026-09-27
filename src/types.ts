@@ -78,10 +78,14 @@ export interface BookWall {
   side: "bid" | "ask";
   price: number;
   notional: number;
+  quantity?: number; // coin amount e.g. 21,500,000
   ageSeconds: number;
-  relativeSize: number;
+  relativeSize: number; // e.g. 280x of normal depth
   distancePercent: number;
   status: "observing" | "confirmed" | "solid";
+  touches?: number; // count of candle touches on chart
+  isMegaWall?: boolean; // huge wall >= 15x or >= $150k
+  isPinned?: boolean; // flat ceiling / floor on candles
 }
 
 
