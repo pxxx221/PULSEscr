@@ -20,7 +20,10 @@ import {
   BarChart3, 
   X,
   Target,
-  ArrowRight
+  ArrowRight,
+  Ruler,
+  Copy,
+  Check
 } from "lucide-react";
 import { Timeframe, TickerData, BookWall } from "../types";
 import { fetchMarketJson, parseKlines, isValidCandle, MarketCandle } from "../services/marketData";
@@ -233,6 +236,262 @@ class HorizontalRayPrimitive implements ISeriesPrimitive {
   get currentPrice() { return this._currentPrice; }
 }
 
+interface RulerData {
+  timeA: number;
+  priceA: number;
+  timeB: number;
+  priceB: number;
+  isLocked: boolean;
+  barsCount?: number;
+  timeSpanStr?: string;
+  volStr?: string;
+}
+
+interface RulerRenderData {
+  xA: number | null;
+  yA: number | null;
+  xB: number | null;
+  yB: number | null;
+  priceA: number;
+  priceB: number;
+  barsCount?: number;
+  timeSpanStr?: string;
+  volStr?: string;
+  isLocked: boolean;
+}
+
+function formatRulerTimeSpan(sec: number): string {
+  if (sec < 60) return `${sec}с`;
+  const mins = Math.round(sec / 60);
+  if (mins < 60) return `${mins}м`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hours}ч ${remMins}м` : `${hours}ч`;
+}
+
+function formatRulerVolUsd(v: number): string {
+  if (v >= 1_000_000_000) return `$${(v / 1_000_000_000).toFixed(2)}B`;
+  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `$${Math.round(v / 1_000)}K`;
+  return `$${Math.round(v)}`;
+}
+
+class RulerPaneRenderer implements IPrimitivePaneRenderer {
+  private _data: RulerRenderData | null;
+
+  constructor(data: RulerRenderData | null) {
+    this._data = data;
+  }
+
+  draw(target: any) {
+    if (!this._data) return;
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx = scope.context;
+      const hpr = scope.horizontalPixelRatio || 1;
+      const vpr = scope.verticalPixelRatio || 1;
+      const d = this._data;
+      if (!d || d.xA === null || d.yA === null || d.xB === null || d.yB === null) return;
+      if (isNaN(d.xA) || isNaN(d.yA) || isNaN(d.xB) || isNaN(d.yB)) return;
+
+      const xA = Math.round(d.xA * hpr);
+      const yA = Math.round(d.yA * vpr);
+      const xB = Math.round(d.xB * hpr);
+      const yB = Math.round(d.yB * vpr);
+
+      const minX = Math.min(xA, xB);
+      const maxX = Math.max(xA, xB);
+      const minY = Math.min(yA, yB);
+      const maxY = Math.max(yA, yB);
+      const w = Math.max(1, maxX - minX);
+      const h = Math.max(1, maxY - minY);
+
+      const deltaPrice = d.priceB - d.priceA;
+      const percent = d.priceA > 0 ? (deltaPrice / d.priceA) * 100 : 0;
+      const isUp = deltaPrice >= 0;
+
+      // 1. Shaded Measurement Area (soft tint)
+      ctx.fillStyle = isUp ? "rgba(34, 197, 94, 0.12)" : "rgba(239, 68, 68, 0.12)";
+      ctx.fillRect(minX, minY, w, h);
+
+      // 2. Dashed Boundary Rectangle
+      ctx.strokeStyle = isUp ? "rgba(34, 197, 94, 0.75)" : "rgba(239, 68, 68, 0.75)";
+      ctx.lineWidth = Math.round(1 * vpr);
+      ctx.setLineDash([Math.round(4 * hpr), Math.round(3 * hpr)]);
+      ctx.strokeRect(minX, minY, w, h);
+      ctx.setLineDash([]);
+
+      // 3. Diagonal Vector Line from Point A to Point B
+      ctx.strokeStyle = isUp ? "#22C55E" : "#EF4444";
+      ctx.lineWidth = Math.round(1.5 * vpr);
+      ctx.beginPath();
+      ctx.moveTo(xA, yA);
+      ctx.lineTo(xB, yB);
+      ctx.stroke();
+
+      // 4. Anchor Point Circles
+      const drawAnchor = (x: number, y: number) => {
+        ctx.fillStyle = isUp ? "#22C55E" : "#EF4444";
+        ctx.beginPath();
+        ctx.arc(x, y, Math.round(3.5 * vpr), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#FFFFFF";
+        ctx.lineWidth = Math.round(1.5 * vpr);
+        ctx.stroke();
+      };
+      drawAnchor(xA, yA);
+      drawAnchor(xB, yB);
+
+      // 5. Scalper Info Card (Floating Badge)
+      const sign = isUp ? "+" : "";
+      const priceFmt = Math.abs(deltaPrice) >= 1000 
+        ? Math.abs(deltaPrice).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : Math.abs(deltaPrice) >= 1
+        ? Math.abs(deltaPrice).toFixed(4)
+        : Math.abs(deltaPrice).toFixed(6);
+
+      const line1 = `${sign}${percent.toFixed(2)}% (${sign}$${priceFmt})`;
+      const line2 = `${d.barsCount || 1} баров${d.timeSpanStr ? ` (${d.timeSpanStr})` : ""}${d.volStr ? ` · ${d.volStr}` : ""}`;
+
+      const fontTitle = `bold ${Math.round(11 * vpr)}px 'JetBrains Mono', monospace`;
+      const fontSub = `${Math.round(10 * vpr)}px 'JetBrains Mono', monospace`;
+
+      ctx.font = fontTitle;
+      const w1 = ctx.measureText(line1).width;
+      ctx.font = fontSub;
+      const w2 = ctx.measureText(line2).width;
+
+      const badgeW = Math.max(w1, w2) + Math.round(18 * hpr);
+      const badgeH = Math.round(38 * vpr);
+
+      const padding = Math.round(8 * hpr);
+      let badgeX = xB + padding;
+      if (badgeX + badgeW > scope.bitmapSize.width - padding) {
+        badgeX = xB - badgeW - padding;
+      }
+      if (badgeX < padding) badgeX = padding;
+
+      let badgeY = yB - badgeH / 2;
+      if (badgeY < padding) badgeY = padding;
+      if (badgeY + badgeH > scope.bitmapSize.height - padding) {
+        badgeY = scope.bitmapSize.height - badgeH - padding;
+      }
+
+      ctx.fillStyle = "rgba(11, 15, 20, 0.94)";
+      ctx.strokeStyle = isUp ? "rgba(34, 197, 94, 0.85)" : "rgba(239, 68, 68, 0.85)";
+      ctx.lineWidth = Math.round(1.2 * vpr);
+      ctx.beginPath();
+      if (typeof ctx.roundRect === "function") {
+        ctx.roundRect(badgeX, badgeY, badgeW, badgeH, Math.round(5 * vpr));
+      } else {
+        ctx.rect(badgeX, badgeY, badgeW, badgeH);
+      }
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.font = fontTitle;
+      ctx.fillStyle = isUp ? "#4ADE80" : "#F87171";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(line1, badgeX + Math.round(9 * hpr), badgeY + Math.round(6 * vpr));
+
+      ctx.font = fontSub;
+      ctx.fillStyle = "#94A3B8";
+      ctx.fillText(line2, badgeX + Math.round(9 * hpr), badgeY + Math.round(21 * vpr));
+    });
+  }
+}
+
+class RulerPaneView implements IPrimitivePaneView {
+  private _source: RulerPrimitive;
+  private _renderData: RulerRenderData | null = null;
+
+  constructor(source: RulerPrimitive) {
+    this._source = source;
+  }
+
+  update() {
+    const series = this._source.series;
+    const chart = this._source.chart;
+    const ruler = this._source.ruler;
+    if (!series || !chart || !ruler) {
+      this._renderData = null;
+      return;
+    }
+
+    const timeScale = chart.timeScale();
+    const xA = timeScale.timeToCoordinate(ruler.timeA as UTCTimestamp);
+    const yA = series.priceToCoordinate(ruler.priceA);
+    const xB = timeScale.timeToCoordinate(ruler.timeB as UTCTimestamp);
+    const yB = series.priceToCoordinate(ruler.priceB);
+
+    this._renderData = {
+      xA: xA !== null ? Number(xA) : null,
+      yA: yA !== null ? Number(yA) : null,
+      xB: xB !== null ? Number(xB) : null,
+      yB: yB !== null ? Number(yB) : null,
+      priceA: ruler.priceA,
+      priceB: ruler.priceB,
+      barsCount: ruler.barsCount,
+      timeSpanStr: ruler.timeSpanStr,
+      volStr: ruler.volStr,
+      isLocked: ruler.isLocked,
+    };
+  }
+
+  renderer(): IPrimitivePaneRenderer {
+    return new RulerPaneRenderer(this._renderData);
+  }
+}
+
+class RulerPrimitive implements ISeriesPrimitive {
+  private _chart: IChartApi;
+  private _series: ISeriesApi<any>;
+  private _ruler: RulerData | null = null;
+  private _paneViews: RulerPaneView[];
+  private _requestUpdate: (() => void) | null = null;
+
+  constructor(chart: IChartApi, series: ISeriesApi<any>) {
+    this._chart = chart;
+    this._series = series;
+    this._paneViews = [new RulerPaneView(this)];
+  }
+
+  attached(param: any) {
+    this._chart = param.chart;
+    this._series = param.series;
+    this._requestUpdate = param.requestUpdate;
+    this.requestUpdate();
+  }
+
+  detached() {
+    this._requestUpdate = null;
+  }
+
+  requestUpdate() {
+    if (this._requestUpdate) {
+      this._requestUpdate();
+    }
+  }
+
+  updateAllViews() {
+    this._paneViews.forEach((pv) => pv.update());
+  }
+
+  paneViews() {
+    return this._paneViews;
+  }
+
+  setRuler(ruler: RulerData | null) {
+    this._ruler = ruler;
+    this.updateAllViews();
+    this.requestUpdate();
+  }
+
+  get chart() { return this._chart; }
+  get series() { return this._series; }
+  get ruler() { return this._ruler; }
+}
+
 export default function TradingChart({
   symbol,
   timeframe,
@@ -245,6 +504,7 @@ export default function TradingChart({
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const rayPrimitiveRef = useRef<HorizontalRayPrimitive | null>(null);
+  const rulerPrimitiveRef = useRef<RulerPrimitive | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // States
@@ -252,13 +512,34 @@ export default function TradingChart({
   const [userLevels, setUserLevels] = useState<UserLevel[]>([]);
   const [magnetMode, setMagnetMode] = useState<boolean>(true);
   const [levelToolActive, setLevelToolActive] = useState<boolean>(false);
+  const [rulerToolActive, setRulerToolActive] = useState<boolean>(false);
+  const [isShiftPressed, setIsShiftPressed] = useState<boolean>(false);
+  const [copiedTicker, setCopiedTicker] = useState<boolean>(false);
   const [showWalls, setShowWalls] = useState<boolean>(true);
   const [showVolume, setShowVolume] = useState<boolean>(true);
   const [chartStatus, setChartStatus] = useState<string>("Загрузка свечей...");
   const [countdown, setCountdown] = useState<string>("");
   const [reloadTrigger, setReloadTrigger] = useState<number>(0);
 
-  // Global hotkey listener for 'H' / 'h' / 'Р' / 'р' and 'Escape'
+  // Mutable refs to prevent chart re-initialization on state updates
+  const candlesRef = useRef<MarketCandle[]>([]);
+  const wallLinesRef = useRef<any[]>([]);
+  const userLevelsRef = useRef<UserLevel[]>(userLevels);
+  userLevelsRef.current = userLevels;
+  const levelToolActiveRef = useRef<boolean>(levelToolActive);
+  levelToolActiveRef.current = levelToolActive;
+  const rulerToolActiveRef = useRef<boolean>(rulerToolActive);
+  rulerToolActiveRef.current = rulerToolActive;
+  const isShiftPressedRef = useRef<boolean>(false);
+  const rulerMeasuringRef = useRef<boolean>(false);
+  const rulerStartRef = useRef<{ time: number; price: number } | null>(null);
+  const rulerStateRef = useRef<RulerData | null>(null);
+  const magnetModeRef = useRef<boolean>(magnetMode);
+  magnetModeRef.current = magnetMode;
+  const currentPriceRef = useRef<number | null>(currentPrice);
+  currentPriceRef.current = currentPrice;
+
+  // Global hotkey listener for 'H' (Level), 'Shift' (Ruler), and 'Escape'
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
@@ -269,32 +550,56 @@ export default function TradingChart({
         return;
       }
 
-      if (e.key === "h" || e.key === "H" || e.key === "р" || e.key === "Р") {
+      if (e.key === "Shift") {
+        isShiftPressedRef.current = true;
+        setIsShiftPressed(true);
+      } else if (e.key === "h" || e.key === "H" || e.key === "р" || e.key === "Р") {
         e.preventDefault();
         setLevelToolActive((prev) => !prev);
       } else if (e.key === "Escape") {
         setLevelToolActive(false);
+        setRulerToolActive(false);
+        rulerMeasuringRef.current = false;
+        rulerStartRef.current = null;
+        rulerStateRef.current = null;
+        rulerPrimitiveRef.current?.setRuler(null);
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Shift") {
+        isShiftPressedRef.current = false;
+        setIsShiftPressed(false);
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
   }, []);
-
-  // Mutable refs to prevent chart re-initialization on state updates
-  const candlesRef = useRef<MarketCandle[]>([]);
-  const wallLinesRef = useRef<any[]>([]);
-  const userLevelsRef = useRef<UserLevel[]>(userLevels);
-  userLevelsRef.current = userLevels;
-  const levelToolActiveRef = useRef<boolean>(levelToolActive);
-  levelToolActiveRef.current = levelToolActive;
-  const magnetModeRef = useRef<boolean>(magnetMode);
-  magnetModeRef.current = magnetMode;
-  const currentPriceRef = useRef<number | null>(currentPrice);
-  currentPriceRef.current = currentPrice;
 
   const cleanSymbol = symbol.replace("/", "").toUpperCase();
   const tickerInfo = markets ? markets[symbol] : null;
+
+  // Copy ticker to clipboard utility
+  const copyTicker = useCallback(() => {
+    const text = cleanSymbol;
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    } else {
+      const input = document.createElement("input");
+      input.value = text;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      document.body.removeChild(input);
+    }
+    setCopiedTicker(true);
+    setTimeout(() => setCopiedTicker(false), 1500);
+  }, [cleanSymbol]);
 
   // Format price utility
   const formatPrice = useCallback((p: number) => {
@@ -434,6 +739,11 @@ export default function TradingChart({
     rayPrimitiveRef.current = rayPrimitive;
     rayPrimitive.setLevels(userLevelsRef.current, currentPriceRef.current);
     candleSeries.attachPrimitive(rayPrimitive);
+
+    // Attach native RulerPrimitive (Shift + ЛКМ scalper measurement tool)
+    const rulerPrimitive = new RulerPrimitive(chart, candleSeries);
+    rulerPrimitiveRef.current = rulerPrimitive;
+    candleSeries.attachPrimitive(rulerPrimitive);
 
     // 3. Add Volume Series (Quote Volume in USDT)
     const volumeSeries = chart.addSeries(HistogramSeries, {
@@ -755,10 +1065,12 @@ export default function TradingChart({
       }
     });
 
-    // 7. Click listener on chart to place levels (Uses refs, NEVER causes chart remount!)
+    // 7. Click listener on chart to place levels or measure with ruler (Shift + ЛКМ)
     chart.subscribeClick((param) => {
       if (!param.point || !candleSeriesRef.current) return;
-      if (!levelToolActiveRef.current) return;
+
+      const isShift = !!(param.sourceEvent?.shiftKey || isShiftPressedRef.current);
+      const isRulerTrigger = isShift || rulerToolActiveRef.current;
 
       const rawPrice = candleSeriesRef.current.coordinateToPrice(param.point.y);
       if (rawPrice === null) return;
@@ -774,6 +1086,62 @@ export default function TradingChart({
         }
       }
       if (clickedTime === null) return;
+
+      // Handle Ruler Measurement (Shift + ЛКМ or Ruler Tool)
+      if (isRulerTrigger || rulerMeasuringRef.current) {
+        let snapPrice = clickedPrice;
+        let snapTime = clickedTime;
+        if (magnetModeRef.current && candlesRef.current.length) {
+          const candle = candlesRef.current.find((c) => c.time === clickedTime) || 
+            candlesRef.current.reduce((prev, curr) => Math.abs(curr.time - clickedTime!) < Math.abs(prev.time - clickedTime!) ? curr : prev);
+          if (candle) {
+            const diffHigh = Math.abs(candle.high - clickedPrice);
+            const diffLow = Math.abs(candle.low - clickedPrice);
+            snapPrice = diffHigh <= diffLow ? candle.high : candle.low;
+            snapTime = candle.time;
+          }
+        }
+
+        if (!rulerMeasuringRef.current) {
+          // Point A: Start ruler
+          rulerStartRef.current = { time: snapTime, price: snapPrice };
+          rulerMeasuringRef.current = true;
+          const initialRuler: RulerData = {
+            timeA: snapTime,
+            priceA: snapPrice,
+            timeB: snapTime,
+            priceB: snapPrice,
+            isLocked: false,
+            barsCount: 1,
+            timeSpanStr: "0с",
+          };
+          rulerStateRef.current = initialRuler;
+          rulerPrimitiveRef.current?.setRuler(initialRuler);
+          return;
+        } else {
+          // Point B: Lock ruler
+          if (rulerStateRef.current) {
+            const lockedRuler = { ...rulerStateRef.current, isLocked: true };
+            rulerStateRef.current = lockedRuler;
+            rulerPrimitiveRef.current?.setRuler(lockedRuler);
+          }
+          rulerMeasuringRef.current = false;
+          rulerStartRef.current = null;
+          setRulerToolActive(false);
+          return;
+        }
+      }
+
+      // If a ruler was already displayed and user clicks normally, dismiss the ruler
+      if (rulerStateRef.current) {
+        rulerStateRef.current = null;
+        rulerMeasuringRef.current = false;
+        rulerStartRef.current = null;
+        rulerPrimitiveRef.current?.setRuler(null);
+      }
+
+      // Handle Level placement (H)
+      if (!levelToolActiveRef.current) return;
 
       let finalPrice = clickedPrice;
       let finalTime = clickedTime;
@@ -812,6 +1180,73 @@ export default function TradingChart({
       setLevelToolActive(false);
     });
 
+    // 8. Crosshair move listener for live ruler preview (Zero Lag 60fps)
+    chart.subscribeCrosshairMove((param) => {
+      if (!rulerMeasuringRef.current || !rulerStartRef.current || !param.point || !candleSeriesRef.current) return;
+
+      const rawPrice = candleSeriesRef.current.coordinateToPrice(param.point.y);
+      if (rawPrice === null) return;
+      let currPrice = Number(rawPrice);
+
+      let currTime: number | null = param.time ? Number(param.time) : null;
+      if (currTime === null) {
+        const timeFromCoord = chart.timeScale().coordinateToTime(param.point.x);
+        if (timeFromCoord) {
+          currTime = Number(timeFromCoord);
+        } else if (candlesRef.current.length) {
+          currTime = candlesRef.current[candlesRef.current.length - 1].time;
+        }
+      }
+      if (currTime === null) return;
+
+      // Magnet snap on point B
+      if (magnetModeRef.current && candlesRef.current.length) {
+        const candle = candlesRef.current.find((c) => c.time === currTime) || 
+          candlesRef.current.reduce((prev, curr) => Math.abs(curr.time - currTime!) < Math.abs(prev.time - currTime!) ? curr : prev);
+        if (candle) {
+          const diffHigh = Math.abs(candle.high - currPrice);
+          const diffLow = Math.abs(candle.low - currPrice);
+          currPrice = diffHigh <= diffLow ? candle.high : candle.low;
+          currTime = candle.time;
+        }
+      }
+
+      const start = rulerStartRef.current;
+      const candles = candlesRef.current;
+
+      // Calculate bar count & volume sum
+      let barsCount = 1;
+      let volStr: string | undefined = undefined;
+      if (candles.length) {
+        const idxA = candles.findIndex((c) => c.time === start.time);
+        const idxB = candles.findIndex((c) => c.time === currTime);
+        if (idxA !== -1 && idxB !== -1) {
+          const minIdx = Math.min(idxA, idxB);
+          const maxIdx = Math.max(idxA, idxB);
+          barsCount = maxIdx - minIdx + 1;
+          const volSum = candles.slice(minIdx, maxIdx + 1).reduce((acc, c) => acc + c.volume, 0);
+          volStr = formatRulerVolUsd(volSum);
+        }
+      }
+
+      const timeSpanSec = Math.abs(currTime - start.time);
+      const timeSpanStr = formatRulerTimeSpan(timeSpanSec);
+
+      const updatedRuler: RulerData = {
+        timeA: start.time,
+        priceA: start.price,
+        timeB: currTime,
+        priceB: currPrice,
+        isLocked: false,
+        barsCount,
+        timeSpanStr,
+        volStr,
+      };
+
+      rulerStateRef.current = updatedRuler;
+      rulerPrimitiveRef.current?.setRuler(updatedRuler);
+    });
+
     return () => {
       isDisposed = true;
       abortCtrl.abort();
@@ -829,7 +1264,13 @@ export default function TradingChart({
           candleSeriesRef.current.detachPrimitive(rayPrimitiveRef.current);
         } catch {}
       }
+      if (rulerPrimitiveRef.current && candleSeriesRef.current) {
+        try {
+          candleSeriesRef.current.detachPrimitive(rulerPrimitiveRef.current);
+        } catch {}
+      }
       rayPrimitiveRef.current = null;
+      rulerPrimitiveRef.current = null;
       chart.remove();
       chartRef.current = null;
     };
@@ -926,8 +1367,21 @@ export default function TradingChart({
       <div className="h-11 flex-shrink-0 flex items-center justify-between px-3 bg-[#10161F] border-b border-[#1E2936] text-xs">
         {/* Left: Ticker, Price & Candle Countdown */}
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 font-bold">
-            <span className="text-white text-sm tracking-wide">{symbol}</span>
+          <div 
+            className="flex items-center gap-1.5 font-bold cursor-pointer group select-none hover:opacity-90 active:scale-95 transition-all relative"
+            onClick={copyTicker}
+            title="Нажмите, чтобы скопировать тикер в буфер обмена"
+          >
+            <span className="text-white text-sm tracking-wide group-hover:text-cyan-400 transition-colors flex items-center gap-1.5">
+              {symbol}
+              {copiedTicker ? (
+                <span className="text-emerald-400 text-[10px] font-mono font-normal flex items-center gap-1 bg-emerald-950/90 border border-emerald-500/50 px-1.5 py-0.5 rounded shadow">
+                  <Check size={11} className="text-emerald-400" /> Скопировано!
+                </span>
+              ) : (
+                <Copy size={11} className="text-slate-500 group-hover:text-cyan-400 opacity-60 group-hover:opacity-100 transition-opacity" />
+              )}
+            </span>
             {tickerInfo && (
               <span className={`font-mono text-xs ${tickerInfo.change >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                 {tickerInfo.change >= 0 ? "+" : ""}{tickerInfo.change.toFixed(2)}%
@@ -965,6 +1419,20 @@ export default function TradingChart({
 
         {/* Right: Scalper Tools & Toggles */}
         <div className="flex items-center gap-2">
+          {/* Ruler Tool (Shift + ЛКМ) */}
+          <button
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-semibold transition-all ${
+              rulerToolActive || isShiftPressed
+                ? "bg-cyan-950/80 border-cyan-500 text-cyan-300 ring-2 ring-cyan-500/30" 
+                : "bg-[#141C26] border-[#1E2936] text-slate-300 hover:border-slate-600"
+            }`}
+            onClick={() => setRulerToolActive(!rulerToolActive)}
+            title="Линейка: Shift + ЛКМ на графике для замера расстояния, % и баров (Esc — сбросить)"
+          >
+            <Ruler size={13} className={rulerToolActive || isShiftPressed ? "text-cyan-400 animate-pulse" : "text-slate-400"} />
+            <span>{rulerToolActive ? "Замер..." : "Линейка (Shift)"}</span>
+          </button>
+
           {/* Level Drawing Tool */}
           <button
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-semibold transition-all ${
@@ -1034,7 +1502,7 @@ export default function TradingChart({
       </div>
 
       {/* Main Chart Canvas Container */}
-      <div className={`relative flex-1 w-full h-full min-h-0 ${levelToolActive ? "cursor-crosshair" : ""}`}>
+      <div className={`relative flex-1 w-full h-full min-h-0 ${levelToolActive || rulerToolActive || isShiftPressed ? "cursor-crosshair" : ""}`}>
         {/* TradingView Chart Container */}
         <div ref={containerRef} className="w-full h-full" />
 
@@ -1065,6 +1533,14 @@ export default function TradingChart({
           <div className="absolute top-3 right-4 z-30 flex items-center gap-2 px-3 py-1 rounded bg-purple-950/90 border border-purple-500/80 text-purple-200 font-mono text-xs shadow-lg backdrop-blur-sm pointer-events-none animate-pulse">
             <Target size={13} className="text-purple-400" />
             <span>Кликните по свече для установки луча (Esc — отмена)</span>
+          </div>
+        )}
+
+        {/* Ruler Tool Measuring Hint */}
+        {(rulerToolActive || isShiftPressed) && (
+          <div className="absolute top-3 right-4 z-30 flex items-center gap-2 px-3 py-1 rounded bg-cyan-950/90 border border-cyan-500/80 text-cyan-200 font-mono text-xs shadow-lg backdrop-blur-sm pointer-events-none animate-pulse">
+            <Ruler size={13} className="text-cyan-400" />
+            <span>Линейка: Shift + ЛКМ или кликните две точки (Esc — сбросить)</span>
           </div>
         )}
 

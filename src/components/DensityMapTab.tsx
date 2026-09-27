@@ -403,12 +403,16 @@ export default function DensityMapTab({
                   <tr
                     key={`${wall.symbol}-${wall.side}-${wall.price}-${index}`}
                     className={`density-row ${isSelected ? "is-selected-coin" : ""} ${isNear ? "is-near-breakout" : ""}`}
-                    onClick={() => onSelectCoin(wall.symbol)}
+                    onClick={() => {
+                      onSelectCoin(wall.symbol);
+                      onOpenChart(wall.symbol);
+                    }}
+                    title="Нажмите, чтобы открыть график этой монеты"
                   >
                     {/* Coin Symbol */}
                     <td className="font-semibold text-slate-200">
-                      <div className="flex items-center gap-2">
-                        <span className="text-white text-sm font-bold tracking-wide">
+                      <div className="flex items-center gap-2 group cursor-pointer">
+                        <span className="text-white text-sm font-bold tracking-wide group-hover:text-cyan-400 transition-colors">
                           {wall.symbol.split("/")[0]}
                         </span>
                         <span className="text-xs text-slate-500 font-mono">/USDT</span>
