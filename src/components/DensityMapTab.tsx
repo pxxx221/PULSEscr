@@ -44,7 +44,7 @@ export default function DensityMapTab({
   const [sideFilter, setSideFilter] = useState<"ALL" | "bid" | "ask">("ALL");
   const [distanceFilter, setDistanceFilter] = useState<number>(2.5); // max distance %
   const [minNotionalFilter, setMinNotionalFilter] = useState<number>(25); // in thousands ($25K default for alts)
-  const [minAgeFilter, setMinAgeFilter] = useState<number>(60); // Default to >= 60s (от 1 минуты!)
+  const [minAgeFilter, setMinAgeFilter] = useState<number>(0); // Default to 0 so live walls appear immediately
   const [sortField, setSortField] = useState<SortField>("notional");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
 
@@ -273,27 +273,36 @@ export default function DensityMapTab({
           <div className="density-pill-selector">
             <button
               className={presetFilter === "all" ? "active" : ""}
-              onClick={() => setPresetFilter("all")}
+              onClick={() => {
+                setPresetFilter("all");
+              }}
             >
               Все заявки
             </button>
             <button
               className={presetFilter === "mega" ? "active text-amber-300 font-bold border-amber-500/60" : "text-amber-400/90"}
-              onClick={() => setPresetFilter("mega")}
+              onClick={() => {
+                setPresetFilter("mega");
+              }}
               title="Мега-плотности в стакане (>15x к среднему уровню или >$150K)"
             >
               🔥 Мега-стенки (&gt;15x)
             </button>
             <button
               className={presetFilter === "near" ? "active text-cyan-300 font-bold" : ""}
-              onClick={() => setPresetFilter("near")}
+              onClick={() => {
+                setPresetFilter("near");
+              }}
               title="Плотности вплотную к цене (до 0.5% — точка входа в пробой/отскок)"
             >
               ⚡ Поджатие (&le;0.5%)
             </button>
             <button
               className={presetFilter === "solid" ? "active text-emerald-400 font-bold" : ""}
-              onClick={() => setPresetFilter("solid")}
+              onClick={() => {
+                setPresetFilter("solid");
+                setMinAgeFilter(180);
+              }}
               title="Плотности, стоящие более 3 минут"
             >
               🛡️ От 3 мин
