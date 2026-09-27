@@ -9,12 +9,13 @@ import ScannerRadar from "./components/ScannerRadar";
 import ExportCodeModal from "./components/ExportCodeModal";
 import TelegramTestButton from "./components/TelegramTestButton";
 import DensityMapTab from "./components/DensityMapTab";
+import TradingJournalTab from "./components/journal/TradingJournalTab";
 import { useTelegramAlertWatcher } from "./hooks/useTelegramAlertWatcher";
 import { useOrderBookWalls } from "./hooks/useOrderBookWalls";
 import { FlowSnapshot } from "./utils/flowMonitor";
-import { Bell, Settings2, UserRound, X, TrendingUp, Activity, Flame, ShieldAlert, Zap, Layers, RefreshCw, Layers2, PieChart, Sparkles, Layout, ChevronLeft, ChevronRight, Search, CornerDownLeft, Target, Download } from "lucide-react";
+import { Bell, Settings2, UserRound, X, TrendingUp, Activity, Flame, ShieldAlert, Zap, Layers, RefreshCw, Layers2, PieChart, Sparkles, Layout, ChevronLeft, ChevronRight, Search, CornerDownLeft, Target, Download, BookOpen } from "lucide-react";
 export default function App() {
-  const [activeView, setActiveView] = useState<"terminal" | "density-map">("terminal");
+  const [activeView, setActiveView] = useState<"terminal" | "density-map" | "journal">("terminal");
   const [profileOpen, setProfileOpen] = useState(false);
   const [markets, setMarkets] = useState<Record<string, TickerData>>({});
   const [currentCoin, setCurrentCoin] = useState<string>("BTC/USDT");
@@ -531,6 +532,13 @@ export default function App() {
             <Layers size={14} /> <span>Карта плотностей</span>
             {totalWallsCount > 0 && <span className="pulse-tab-badge">{totalWallsCount}</span>}
           </button>
+          <button
+            className={`pulse-nav-tab ${activeView === 'journal' ? 'active' : ''}`}
+            onClick={() => setActiveView('journal')}
+            title="Дневник сделок Tiger.Trade / Binance Futures"
+          >
+            <BookOpen size={14} /> <span>Дневник</span>
+          </button>
         </div>
         <div className="pulse-global-stats">
           <span>Futures <b>{globalStats.totalPairs || '—'}</b></span>
@@ -562,13 +570,22 @@ export default function App() {
               squeezeSensitivity={squeezeSensitivity} markets={markets} onPoolsChange={setActiveCoinPools} confirmedLevel={selectedConfirmedLevel} bookWalls={bookWalls[currentCoin] || []}/>
           </section>
         </main>
-      ) : (
+      ) : activeView === "density-map" ? (
         <main className="flex-1 min-h-0 flex overflow-hidden">
           <DensityMapTab
             bookWalls={bookWalls}
             markets={markets}
             currentCoin={currentCoin}
             onSelectCoin={selectCoin}
+            onOpenChart={(symbol) => {
+              selectCoin(symbol);
+              setActiveView("terminal");
+            }}
+          />
+        </main>
+      ) : (
+        <main className="flex-1 min-h-0 flex overflow-hidden">
+          <TradingJournalTab
             onOpenChart={(symbol) => {
               selectCoin(symbol);
               setActiveView("terminal");
